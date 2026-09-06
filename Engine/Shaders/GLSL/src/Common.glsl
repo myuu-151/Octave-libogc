@@ -241,7 +241,7 @@ vec4 BlendTexture(MaterialUniforms material, vec4 prevColor, uint texIdx, sample
         else if (tevMode == TEV_MODE_MODULATE)
             outColor = prevColor * texColor;
         else if (tevMode == TEV_MODE_DECAL)
-            outColor = prevColor * (1 - texColor.a) + (texColor * texColor.a);
+            outColor = vec4(mix(prevColor.rgb, texColor.rgb, texColor.a), prevColor.a); // GX TEV decal passes prev alpha through
         else if (tevMode == TEV_MODE_ADD)
             outColor = prevColor + texColor;
         else if (tevMode == TEV_MODE_SIGNED_ADD)
