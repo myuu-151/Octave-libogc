@@ -6,6 +6,8 @@
 
 A 3D Game Engine for GameCube, Wii, 3DS, Windows, Linux, and Android
 
+> **Note:** This fork specifically targets the original **libogc**, from before the lead developers shifted away from it (upstream Octave has since moved to libogc2). Use this if you want to build with the standard devkitPro libogc toolchain.
+
 [Tutorial Video](https://youtu.be/0CHLn0ie-DY)
 
 [Lua Documentation](Documentation/Lua/README.md)
