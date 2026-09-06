@@ -10,8 +10,6 @@ A 3D Game Engine for GameCube, Wii, 3DS, Windows, Linux, and Android
 
 [Lua Documentation](Documentation/Lua/README.md)
 
-[Docker Documentation](Documentation/Docker/README.md)
-
 [Editor Hotkeys](Documentation/Info/Editor.md)
 
 **Check out the Releases page for precompiled standalone builds.**
@@ -28,7 +26,7 @@ Instructions for building from source below.
    - devkitPPC for GameCube/Wii development
    - devkitARM for 3DS development
    - Instructions for installing the devkitPro toolchains can be found in the devkitPro wiki [here](https://devkitpro.org/wiki/Getting_Started)
-2. GameCube packaging currently only works on Linux or Docker. We recommend building GameCube games on Windows with Docker see instructions below. But if you want to try to get them to package on Windows:
+2. GameCube packaging currently only works on Linux. But if you want to try to get them to package on Windows:
    - Open your Start Menu and launch `devkitPro > MSys2`
    - `pacman-key --recv-keys C8A2759C315CFBC3429CC2E422B803BA8AA3D7CE --keyserver keyserver.ubuntu.com`
    - `pacman-key --lsign-key C8A2759C315CFBC3429CC2E422B803BA8AA3D7CE`
@@ -122,38 +120,6 @@ CMake support is currently a work-in-progress, and only Linux support has been i
 - Make sure you pull all submodules `git submodule update --init --recursive`
 - Install pkg-config `sudo apt install pkg-config`(debian/ubuntu), `
 - Install vorbis dev libraries `sudo apt install libvorbis-dev`
-
-# Docker
-Octave includes a Docker build system for reproducible builds across all supported platforms. You can also use the Docker system to build Octave itself from source without installing any dependencies on your host machine. You can get more information about using the Docker build system at [Documentation/Docker.md](Documentation/Info/Docker.md).
-
-## Requirements
-- Install Docker from <https://docs.docker.com/get-docker/>
-
-## Build the Octave Docker Image
-From your terminal, run:
-```bash
-# Clone the Octave repository if you haven't already, or to get the latest version
-git clone https://github.com/mholtkamp/octave
-# Move into the octave directory
-cd octave
-# Build the Docker image
-./Docker/build.sh
-```
-
-## Packaging Games With Docker
-To package your game using the Docker build system, run the following command from the root of your project directory (where your .octp file is located):
-```bash
-docker run --rm -v ./dist/3DS:/game -v .:/project octavegameengine build-3ds
-```
-This command mounts your project directory to `/project` in the Docker container, and tells the system to export your file to `./dist`. You should create the `dist` directory or whatever you want to export to beforehand or else the directory will be created by Docker and you will have to `sudo chmod -R 777 ./dist` to change permissions so you can access it.
- or do a `sudo rm -rf ./dist` to delete the directory.
-
-### Available Docker Build Commands
-- `build-linux` - Build a Linux `.elf` executable
-- `build-gamecube` - Build a GameCube `.dol` file
-- `build-wii` - Build a Wii `.dol` file
-- `build-3ds` - Build a Nintendo `.3dsx` ROM
-
 
 # Special Thanks
 
