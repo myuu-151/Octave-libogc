@@ -26,19 +26,10 @@ Instructions for building from source below.
    - devkitPPC for GameCube/Wii development
    - devkitARM for 3DS development
    - Instructions for installing the devkitPro toolchains can be found in the devkitPro wiki [here](https://devkitpro.org/wiki/Getting_Started)
-2. GameCube packaging currently only works on Linux. But if you want to try to get them to package on Windows:
+2. For GameCube/Wii development, install the standard devkitPro libraries (libogc):
    - Open your Start Menu and launch `devkitPro > MSys2`
-   - `pacman-key --recv-keys C8A2759C315CFBC3429CC2E422B803BA8AA3D7CE --keyserver keyserver.ubuntu.com`
-   - `pacman-key --lsign-key C8A2759C315CFBC3429CC2E422B803BA8AA3D7CE`
-   - Put this entry in `C:\devkitPro\msys2\etc\pacman.conf` above the `[dkp-libs]` entry:
-   ```
-      [extremscorner-devkitpro]
-      Server = https://packages.extremscorner.org/devkitpro/windows/$arch
-   ```
-   - `pacman -Syuu`
-   - `pacman -S gamecube-tools-git libogc2 libogc2-libdvm`
-      - Accept overwriting if asked.
-   - Restart computer if you've opened Visual Studio prior to installing `libogc2` to make sure the environment variables are found.
+   - `pacman -S gamecube-dev wii-dev`
+   - Restart computer if you've opened Visual Studio prior to installing to make sure the environment variables are found.
 3. Build shaders by running compile.bat in `/Engine/Shaders/GLSL`.
 4. Open Octave.sln.
 5. Switch to the DebugEditor solution configuration.
@@ -79,17 +70,8 @@ Instructions for building from source below.
    - sudo dkp-pacman -S wii-dev
    - sudo dkp-pacman -S 3ds-dev
    - Restart computer
-3. If you want to package for GameCube, install `libogc2` (<https://github.com/extremscorner/pacman-packages#readme>)
-   - `sudo dkp-pacman-key --recv-keys C8A2759C315CFBC3429CC2E422B803BA8AA3D7CE --keyserver keyserver.ubuntu.com`
-   - `sudo dkp-pacman-key --lsign-key C8A2759C315CFBC3429CC2E422B803BA8AA3D7CE`
-   - Put this entry in `/opt/devkitpro/pacman/etc/pacman.conf` above the `[dkp-libs]` entry:
-   ```
-      [extremscorner-devkitpro]
-      Server = https://packages.extremscorner.org/devkitpro/linux/$arch
-   ```
-   - `sudo dkp-pacman -Syuu`
-   - `sudo dkp-pacman -S gamecube-tools-git libogc2 libogc2-libdvm`
-      - Accept overwriting if asked.
+3. If you want to package for GameCube, install the standard devkitPro GameCube libraries (libogc):
+   - `sudo dkp-pacman -S gamecube-dev`
 4. cd Engine/Shaders/GLSL/ then run ./compile.sh.
 
 ### Compiling (Visual Studio Code)
