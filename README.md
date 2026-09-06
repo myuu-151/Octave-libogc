@@ -6,7 +6,10 @@
 
 A 3D Game Engine for GameCube, Wii, 3DS, Windows, Linux, and Android
 
-> **Why this fork?** Upstream Octave switched to libogc2, which requires adding a third-party package repository to devkitPro. This fork stays on the original **libogc**, so a stock devkitPro install (`gamecube-dev` / `wii-dev`) is all you need to build for GameCube and Wii.
+> **Why this fork?**
+> - Stays on the original **libogc** — upstream Octave now requires libogc2 and a third-party package repository.
+> - A stock devkitPro install (`gamecube-dev` / `wii-dev`) is all you need for GameCube and Wii.
+> - No Docker required — everything builds natively on Windows and Linux.
 
 [Tutorial Video](https://youtu.be/0CHLn0ie-DY)
 
