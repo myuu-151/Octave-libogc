@@ -2424,6 +2424,35 @@ static void DrawScenePanel()
             bool nodeOpen = ImGui::TreeNodeEx(node->GetName().c_str(), nodeFlags);
             bool nodeClicked = ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen();
             bool nodeMiddleClicked = ImGui::IsItemClicked(ImGuiMouseButton_Middle);
+
+            // Drag & drop reparenting: drag a node onto another to make it that
+            // node's child. Guards against dropping onto self or a descendant.
+            if (!inSubScene && !node->IsWorldRoot() &&
+                ImGui::BeginDragDropSource(ImGuiDragDropFlags_None))
+            {
+                Node* dragNode = node;
+                ImGui::SetDragDropPayload("HIER_NODE", &dragNode, sizeof(Node*));
+                ImGui::Text("%s", node->GetName().c_str());
+                ImGui::EndDragDropSource();
+            }
+            if (!inSubScene && ImGui::BeginDragDropTarget())
+            {
+                const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIER_NODE");
+                if (payload != nullptr && payload->DataSize == (int)sizeof(Node*))
+                {
+                    Node* dropped = *(Node**)payload->Data;
+                    bool valid = (dropped != nullptr && dropped != node && !dropped->IsWorldRoot());
+                    for (Node* a = node; valid && a != nullptr; a = a->GetParent())
+                    {
+                        if (a == dropped) valid = false;   // can't reparent under own descendant
+                    }
+                    if (valid && dropped->GetParent() != node)
+                    {
+                        ActionManager::Get()->EXE_AttachNode(dropped, node, -1, -1);
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
             bool expandChildren = trackingNode || (nodeMiddleClicked && IsControlDown());
             bool collapseChildren = !expandChildren && nodeMiddleClicked;
 
@@ -2493,6 +2522,32 @@ static void DrawScenePanel()
                 if (!node->IsWorldRoot() && !inSubScene && ImGui::Selectable("Set Root Node"))
                 {
                     am->EXE_SetRootNode(node);
+                }
+                // Unlink (self): detach a nested node up to the world root so it
+                // becomes its own top-level instance. Shown only when the node is
+                // nested (its parent isn't already the root).
+                {
+                    Node* worldRoot = GetWorld(0) ? GetWorld(0)->GetRootNode() : nullptr;
+                    bool nested = (node->GetParent() != nullptr &&
+                                   node->GetParent()->GetParent() != nullptr);
+                    if (!node->IsWorldRoot() && !inSubScene && nested && worldRoot != nullptr &&
+                        ImGui::Selectable("Unlink"))
+                    {
+                        am->EXE_AttachNode(node, worldRoot, -1, -1);
+                    }
+                    // Unlink Children: promote this node's direct children up to the
+                    // root, so the node becomes a leaf you can delete without taking
+                    // its stack along. Shown only when the node actually has children.
+                    if (!inSubScene && node->GetNumChildren() > 0 && worldRoot != nullptr &&
+                        ImGui::Selectable("Unlink Children"))
+                    {
+                        // snapshot the list first, since reparenting mutates it
+                        std::vector<Node*> kids;
+                        for (uint32_t c = 0; c < node->GetNumChildren(); ++c)
+                            kids.push_back(node->GetChild(c));
+                        for (uint32_t c = 0; c < kids.size(); ++c)
+                            am->EXE_AttachNode(kids[c], worldRoot, -1, -1);
+                    }
                 }
                 if ((nodeSceneLinked || inSubScene) && ImGui::Selectable("Unlink Scene"))
                 {
@@ -4199,6 +4254,23 @@ static void DrawViewportPanel()
             (projMode == ProjectionMode::ORTHOGRAPHIC && ImGui::Selectable("Perspective")))
         {
             GetEditorState()->ToggleEditorCameraProjection();
+        }
+        // Snap the selected Camera3D node to the editor viewport's current view,
+        // so the game camera frames exactly what you're looking at in the editor.
+        if (ImGui::Selectable("Align Camera to Viewport Angle"))
+        {
+            Node* selNode = GetEditorState()->GetSelectedNode();
+            Camera3D* selCam = selNode ? selNode->As<Camera3D>() : nullptr;
+            Camera3D* editCam = GetEditorState()->GetEditorCamera();
+            if (selCam != nullptr && editCam != nullptr)
+            {
+                selCam->SetWorldPosition(editCam->GetWorldPosition());
+                selCam->SetWorldRotation(editCam->GetWorldRotationQuat());
+            }
+            else
+            {
+                LogWarning("Align Camera: select a Camera3D node first.");
+            }
         }
         if (ImGui::Selectable("Wireframe"))
             renderer->SetDebugMode(renderer->GetDebugMode() == DEBUG_WIREFRAME ? DEBUG_NONE : DEBUG_WIREFRAME);
