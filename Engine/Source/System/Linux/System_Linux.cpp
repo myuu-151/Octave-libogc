@@ -607,6 +607,12 @@ std::string SYS_GetExecutablePath()
     return "";
 }
 
+void SYS_SetProjectFileAssociation()
+{
+    // Not implemented on Linux (Windows-only feature for now).
+    LogWarning("Set Default Engine: .octp file association is only supported on Windows.");
+}
+
 std::string SYS_GetCurrentDirectoryPath()
 {
     char path[MAX_PATH_SIZE] = {};
