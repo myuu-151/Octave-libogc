@@ -32,6 +32,9 @@
 #include "EditorState.h"
 #include "EditorImgui.h"
 #include "Utilities.h"
+#include "System/System.h"
+
+#include <string>
 
 void OctPreInitialize(EngineConfig& config);
 
@@ -39,6 +42,21 @@ void EditorMain(int32_t argc, char** argv)
 {
     GetEngineState()->mArgC = argc;
     GetEngineState()->mArgV = argv;
+
+#if PLATFORM_WINDOWS
+    // Anchor the working directory to the exe's own folder so engine resources
+    // (fonts, default assets, shaders) resolve no matter how the editor was
+    // launched. Without this, double-clicking a .octp sets the working directory
+    // to the project folder, and the editor can't find Engine/Assets -> crash.
+    {
+        std::string exePath = SYS_GetExecutablePath();
+        size_t slash = exePath.find_last_of("\\/");
+        if (slash != std::string::npos)
+        {
+            SetWorkingDirectory(exePath.substr(0, slash));
+        }
+    }
+#endif
 
     ReadCommandLineArgs(argc, argv);
 
