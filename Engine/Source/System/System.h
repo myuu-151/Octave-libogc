@@ -18,6 +18,9 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
 void SYS_ReleaseFileData(char* data);
 std::string SYS_GetExecutablePath();
 std::string SYS_GetOctavePath();
+// Register the running editor as the handler for .octp project files, so
+// double-clicking one launches it (with -project). Per-user; no admin needed.
+void SYS_SetProjectFileAssociation();
 std::string SYS_GetCurrentDirectoryPath();
 std::string SYS_GetAbsolutePath(const std::string& relativePath);
 void SYS_ExplorerOpenDirectory(const std::string& dirPath);
