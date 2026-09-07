@@ -445,6 +445,42 @@ std::string SYS_GetExecutablePath()
     return std::string(path);
 }
 
+static void WriteClassesKey(const char* subKey, const char* value)
+{
+    HKEY key = nullptr;
+    std::string full = std::string("Software\\Classes\\") + subKey;
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, full.c_str(), 0, nullptr, 0,
+                        KEY_WRITE, nullptr, &key, nullptr) == ERROR_SUCCESS)
+    {
+        RegSetValueExA(key, nullptr, 0, REG_SZ,
+                       (const BYTE*)value, (DWORD)(strlen(value) + 1));
+        RegCloseKey(key);
+    }
+}
+
+void SYS_SetProjectFileAssociation()
+{
+    std::string exe = SYS_GetExecutablePath();
+    std::string command = "\"" + exe + "\" -project \"%1\"";
+    std::string icon = exe + ",0";
+
+    WriteClassesKey(".octp", "Octave.Project");
+    WriteClassesKey("Octave.Project", "Octave Project");
+    WriteClassesKey("Octave.Project\\DefaultIcon", icon.c_str());
+    WriteClassesKey("Octave.Project\\shell\\open\\command", command.c_str());
+
+    // A user "Always open with X" choice writes a UserChoice key under FileExts
+    // that OVERRIDES the Software\Classes association above -- so clear it (and
+    // the stale OpenWith lists) to let our association take effect. These live in
+    // HKCU, so no admin is needed. Windows then falls back to Octave.Project.
+    RegDeleteTreeA(HKEY_CURRENT_USER,
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.octp");
+
+    // Tell the shell the association changed so it takes effect immediately.
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+    LogDebug(".octp files now open with %s", exe.c_str());
+}
+
 std::string SYS_GetCurrentDirectoryPath()
 {
     char path[MAX_PATH_SIZE] = {};
