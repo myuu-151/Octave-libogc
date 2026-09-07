@@ -4367,6 +4367,13 @@ static void DrawViewportPanel()
         snprintf(versionStr, 31, "Version: %d", OCTAVE_VERSION);
         ImGui::Selectable(versionStr);
 
+        // Register this exe as the .octp handler, so double-clicking a project
+        // file launches into this editor.
+        if (ImGui::Selectable("Set as Default Path"))
+        {
+            SYS_SetProjectFileAssociation();
+        }
+
         if (ImGui::IsItemHovered() && IsMouseButtonJustUp(MOUSE_RIGHT))
         {
             sDevModeClicks++;
