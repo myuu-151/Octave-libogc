@@ -1875,6 +1875,65 @@ Asset* ActionManager::ImportAsset(const std::string& path)
     int32_t dotIndex = int32_t(filename.find_last_of('.'));
     std::string extension = filename.substr(dotIndex, filename.size() - dotIndex);
 
+    // Native Octave asset (.oct): it's already serialized, so deserialize it
+    // directly -- read its type from the header and LoadFile() -- rather than
+    // running a raw importer. Then register + save it into the project like a
+    // freshly imported asset.
+    if (extension == ".oct")
+    {
+        Stream headerStream;
+        headerStream.ReadFile(path.c_str(), true,
+            sizeof(uint32_t) * 3 + sizeof(uint8_t) + sizeof(uint64_t));
+        AssetHeader header = Asset::ReadHeader(headerStream);
+
+        if (header.mMagic != ASSET_MAGIC_NUMBER || header.mType == INVALID_TYPE_ID)
+        {
+            LogError("Failed to import .oct: bad header or unknown asset type.");
+            return nullptr;
+        }
+
+        Asset* newAsset = Asset::CreateInstance(header.mType);
+        if (newAsset == nullptr)
+        {
+            LogError("Failed to import .oct: unregistered asset type.");
+            return nullptr;
+        }
+
+        // Synchronous LoadFile (null request) deserializes AND calls Create(),
+        // so we must NOT call Create() again here (it asserts on double-load).
+        newAsset->LoadFile(path.c_str(), nullptr);
+
+        // Name the imported asset after the FILE (like the raw importers do), not
+        // its internal serialized name -- so copying M_FoamLine.oct to
+        // M_FoamLine3.oct imports as a new "M_FoamLine3" instead of overwriting
+        // the original M_FoamLine.
+        std::string assetName = filename.substr(0, dotIndex);
+        newAsset->SetName(assetName);
+
+        AssetDir* assetDir = GetEditorState()->GetAssetDirectory();
+        std::string octName = assetName + ".oct";
+
+        Asset* oldAsset = FetchAsset(assetName.c_str());
+        if (oldAsset != nullptr && GetEditorState()->GetInspectedObject() == oldAsset)
+        {
+            GetEditorState()->InspectObject(nullptr, true);
+        }
+#if ASSET_LIVE_REF_TRACKING
+        if (oldAsset != nullptr)
+        {
+            AssetRef::ReplaceReferencesToAsset(oldAsset, newAsset);
+        }
+#endif
+        AssetManager::Get()->PurgeAsset(assetName.c_str());
+
+        AssetStub* stub = AssetManager::Get()->RegisterAsset(octName, newAsset->GetType(), assetDir, nullptr, false);
+        stub->mAsset = newAsset;
+        newAsset->SetName(stub->mName);
+        AssetManager::Get()->SaveAsset(*stub);
+
+        return newAsset;
+    }
+
     if (extension == ".png" ||
         extension == ".bmp" ||
         extension == ".jpeg" ||
