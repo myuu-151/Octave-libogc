@@ -321,14 +321,22 @@ void SYS_Initialize()
     }
 
 #if EDITOR
-    ImGui_ImplWin32_Init(engineState->mSystem.mWindow);
+    // Skip the ImGui Win32 backend in headless mode -- no ImGui context exists
+    // (EditorImguiInit() early-returns), so its internal ImGui::GetIO() asserts.
+    if (!IsHeadless())
+    {
+        ImGui_ImplWin32_Init(engineState->mSystem.mWindow);
+    }
 #endif
 }
 
 void SYS_Shutdown()
 {
 #if EDITOR
-    ImGui_ImplWin32_Shutdown();
+    if (!IsHeadless())
+    {
+        ImGui_ImplWin32_Shutdown();
+    }
 #endif
 }
 

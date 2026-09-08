@@ -14,6 +14,7 @@
 #include <string>
 #include <functional>
 #include <algorithm>
+#include <cctype>
 
 #include "Log.h"
 #include "EditorConstants.h"
@@ -150,6 +151,321 @@ void ReplaceStringInFile(const std::string& file, const std::string& srcString, 
 
     Stream outStream(fileString.c_str(), (uint32_t)fileString.size());
     outStream.WriteFile(file.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// GameCube disc-image (.iso / .gcm) builder
+//
+// Lays the cooked Packaged/GCN tree into a real GameCube disc filesystem so the
+// game reads its assets straight off the disc (via the runtime FST reader in
+// System_Dolphin.cpp) instead of an SD card. Disc layout:
+//
+//   0x0000  boot.bin   (0x0440)  disc header (game id, magic, dol/FST offsets)
+//   0x0440  bi2.bin    (0x2000)  disc info (zeroed -- Dolphin/IPL tolerant)
+//   0x2440  apploader.img         IPL-run loader that reads FST + main.dol
+//   ......  main.dol              the game executable
+//   ......  FST                   entries + string table
+//   ......  file data             every file 32-byte aligned (DVD read rule)
+//
+// The FST stores absolute disc offsets; the apploader loads it into RAM and
+// records its address at OS global 0x80000038, which the runtime reader parses.
+// ---------------------------------------------------------------------------
+namespace GcmBuild
+{
+    struct GcmNode
+    {
+        std::string name;       // basename ("" for root)
+        bool isDir = false;
+        std::string fsPath;     // host filesystem path (files only)
+        uint32_t size = 0;      // file size in bytes (files only)
+        std::vector<GcmNode> children;
+    };
+
+    static uint32_t AlignUp(uint32_t v, uint32_t a) { return (v + (a - 1)) & ~(a - 1); }
+
+    static void Put32(std::vector<uint8_t>& buf, size_t at, uint32_t v)
+    {
+        buf[at + 0] = uint8_t(v >> 24);
+        buf[at + 1] = uint8_t(v >> 16);
+        buf[at + 2] = uint8_t(v >> 8);
+        buf[at + 3] = uint8_t(v);
+    }
+
+    static uint32_t HostFileSize(const std::string& path)
+    {
+        FILE* f = fopen(path.c_str(), "rb");
+        if (!f) return 0;
+        fseek(f, 0, SEEK_END);
+        long sz = ftell(f);
+        fclose(f);
+        return (sz > 0) ? uint32_t(sz) : 0;
+    }
+
+    static bool ReadHostFile(const std::string& path, uint8_t* dst, uint32_t len)
+    {
+        FILE* f = fopen(path.c_str(), "rb");
+        if (!f) return false;
+        size_t rd = fread(dst, 1, len, f);
+        fclose(f);
+        return rd == len;
+    }
+
+    // Recursively build the tree from a directory, skipping the emitted .dol/.iso.
+    static void BuildTree(const std::string& dirPath, GcmNode& node, const std::string& skipDol)
+    {
+        DirEntry entry = {};
+        SYS_OpenDirectory(dirPath, entry);
+
+        // Collect first so we can sort deterministically (case-insensitive).
+        std::vector<std::pair<std::string, bool>> items; // name, isDir
+        while (entry.mValid)
+        {
+            const char* fn = entry.mFilename;
+            if (fn[0] != '.')
+            {
+                items.push_back({ std::string(fn), entry.mDirectory });
+            }
+            SYS_IterateDirectory(entry);
+        }
+        SYS_CloseDirectory(entry);
+
+        std::sort(items.begin(), items.end(), [](const std::pair<std::string,bool>& a, const std::pair<std::string,bool>& b)
+        {
+            std::string la = a.first, lb = b.first;
+            for (char& c : la) c = (char)tolower((unsigned char)c);
+            for (char& c : lb) c = (char)tolower((unsigned char)c);
+            return la < lb;
+        });
+
+        for (auto& it : items)
+        {
+            std::string full = dirPath + it.first;
+            if (it.second)
+            {
+                GcmNode child;
+                child.name = it.first;
+                child.isDir = true;
+                BuildTree(full + "/", child, skipDol);
+                node.children.push_back(std::move(child));
+            }
+            else
+            {
+                // Skip the standalone main.dol copy (it lives at its own disc
+                // offset) and any previously-built disc image.
+                if (it.first == skipDol) continue;
+                std::string ext;
+                size_t dot = it.first.find_last_of('.');
+                if (dot != std::string::npos) ext = it.first.substr(dot);
+                if (ext == ".iso" || ext == ".gcm") continue;
+
+                GcmNode child;
+                child.name = it.first;
+                child.isDir = false;
+                child.fsPath = full;
+                child.size = HostFileSize(full);
+                node.children.push_back(std::move(child));
+            }
+        }
+    }
+
+    // Flatten to pre-order, assigning parent + subtree bounds (FST layout).
+    static void Flatten(const GcmNode& n, int parent,
+                        std::vector<const GcmNode*>& order,
+                        std::vector<int>& parents,
+                        std::vector<int>& nextIndex)
+    {
+        int myIdx = (int)order.size();
+        order.push_back(&n);
+        parents.push_back(parent);
+        nextIndex.push_back(0); // placeholder
+        for (const GcmNode& c : n.children)
+        {
+            Flatten(c, myIdx, order, parents, nextIndex);
+        }
+        nextIndex[myIdx] = (int)order.size(); // one past this subtree
+    }
+}
+
+// Returns true on success. apploaderPath must point at a valid GC apploader.img.
+static bool BuildGameCubeIso(const std::string& packagedDir,
+                             const std::string& dolPath,
+                             const std::string& apploaderPath,
+                             const std::string& isoPath,
+                             const std::string& gameName)
+{
+    using namespace GcmBuild;
+
+    if (!SYS_DoesFileExist(apploaderPath.c_str(), false))
+    {
+        LogError("GCN ISO: apploader not found at %s -- skipping disc image.", apploaderPath.c_str());
+        return false;
+    }
+    if (!SYS_DoesFileExist(dolPath.c_str(), false))
+    {
+        LogError("GCN ISO: main.dol not found at %s", dolPath.c_str());
+        return false;
+    }
+
+    uint32_t apploaderSize = HostFileSize(apploaderPath);
+    uint32_t dolSize = HostFileSize(dolPath);
+    if (apploaderSize == 0 || dolSize == 0)
+    {
+        LogError("GCN ISO: apploader or dol is empty.");
+        return false;
+    }
+
+    // Build the file tree from the packaged folder (exclude the loose .dol).
+    std::string dolName = gameName + ".dol";
+    GcmNode root;
+    root.isDir = true;
+    BuildTree(packagedDir, root, dolName);
+
+    // Flatten into FST order.
+    std::vector<const GcmNode*> order;
+    std::vector<int> parents;
+    std::vector<int> nextIndex;
+    Flatten(root, 0, order, parents, nextIndex);
+    uint32_t entryCount = (uint32_t)order.size();
+
+    // Build the string table (names of every entry except the root).
+    std::vector<uint8_t> strTable;
+    std::vector<uint32_t> nameOffset(entryCount, 0);
+    for (uint32_t i = 1; i < entryCount; ++i)
+    {
+        nameOffset[i] = (uint32_t)strTable.size();
+        const std::string& nm = order[i]->name;
+        strTable.insert(strTable.end(), nm.begin(), nm.end());
+        strTable.push_back(0);
+    }
+
+    uint32_t fstEntriesSize = entryCount * 12;
+    uint32_t fstSize = fstEntriesSize + (uint32_t)strTable.size();
+
+    // Compute image layout offsets.
+    const uint32_t kBootBinSize = 0x0440;
+    const uint32_t kBi2Size     = 0x2000;
+    const uint32_t kApploaderOff = 0x2440;
+
+    uint32_t dolOffset = AlignUp(kApploaderOff + apploaderSize, 0x100);
+    uint32_t fstOffset = AlignUp(dolOffset + dolSize, 0x100);
+    uint32_t dataStart = AlignUp(fstOffset + fstSize, 0x20);
+
+    // Assign each file an aligned disc offset.
+    std::vector<uint32_t> fileDiscOffset(entryCount, 0);
+    uint32_t cursor = dataStart;
+    for (uint32_t i = 0; i < entryCount; ++i)
+    {
+        if (!order[i]->isDir)
+        {
+            cursor = AlignUp(cursor, 0x20);
+            fileDiscOffset[i] = cursor;
+            cursor += order[i]->size;
+        }
+    }
+    uint32_t imageSize = AlignUp(cursor, 0x20);
+
+    LogDebug("GCN ISO: %u FST entries, image size %.2f MB.", entryCount, imageSize / (1024.0f * 1024.0f));
+
+    // Allocate and zero the whole image.
+    std::vector<uint8_t> img;
+    img.resize(imageSize, 0);
+
+    // --- boot.bin ---
+    // Game id "GOCT" + maker "01" (arbitrary homebrew id).
+    const char* id = "GOCT";
+    memcpy(&img[0], id, 4);
+    img[4] = '0'; img[5] = '1';
+    Put32(img, 0x1C, 0xC2339F3D);                 // GameCube disc magic
+    {
+        std::string nm = gameName;
+        if (nm.size() > 0x3E0) nm = nm.substr(0, 0x3E0);
+        memcpy(&img[0x20], nm.c_str(), nm.size());  // internal game name
+    }
+    Put32(img, 0x0420, dolOffset);
+    Put32(img, 0x0424, fstOffset);
+    Put32(img, 0x0428, fstSize);
+    Put32(img, 0x042C, fstSize);                   // FST max size (single-disc)
+
+    // --- bi2.bin --- left zeroed (0x0440 .. 0x2440)
+
+    // --- apploader ---
+    if (!ReadHostFile(apploaderPath, &img[kApploaderOff], apploaderSize))
+    {
+        LogError("GCN ISO: failed to read apploader.");
+        return false;
+    }
+
+    // --- main.dol ---
+    if (!ReadHostFile(dolPath, &img[dolOffset], dolSize))
+    {
+        LogError("GCN ISO: failed to read main.dol.");
+        return false;
+    }
+
+    // --- FST entries ---
+    for (uint32_t i = 0; i < entryCount; ++i)
+    {
+        size_t e = fstOffset + i * 12;
+        const GcmNode* n = order[i];
+        img[e] = n->isDir ? 1 : 0;
+        // 24-bit name offset
+        img[e + 1] = uint8_t(nameOffset[i] >> 16);
+        img[e + 2] = uint8_t(nameOffset[i] >> 8);
+        img[e + 3] = uint8_t(nameOffset[i]);
+
+        if (i == 0)
+        {
+            // Root: parent 0, "next index" = total entry count.
+            Put32(img, e + 4, 0);
+            Put32(img, e + 8, entryCount);
+        }
+        else if (n->isDir)
+        {
+            Put32(img, e + 4, (uint32_t)parents[i]);
+            Put32(img, e + 8, (uint32_t)nextIndex[i]);
+        }
+        else
+        {
+            Put32(img, e + 4, fileDiscOffset[i]);
+            Put32(img, e + 8, n->size);
+        }
+    }
+    // FST string table.
+    if (!strTable.empty())
+    {
+        memcpy(&img[fstOffset + fstEntriesSize], strTable.data(), strTable.size());
+    }
+
+    // --- file data ---
+    for (uint32_t i = 0; i < entryCount; ++i)
+    {
+        if (!order[i]->isDir && order[i]->size > 0)
+        {
+            if (!ReadHostFile(order[i]->fsPath, &img[fileDiscOffset[i]], order[i]->size))
+            {
+                LogError("GCN ISO: failed to read %s", order[i]->fsPath.c_str());
+                return false;
+            }
+        }
+    }
+
+    // Write the image.
+    FILE* out = fopen(isoPath.c_str(), "wb");
+    if (!out)
+    {
+        LogError("GCN ISO: cannot open output %s", isoPath.c_str());
+        return false;
+    }
+    size_t wrote = fwrite(img.data(), 1, img.size(), out);
+    fclose(out);
+    if (wrote != img.size())
+    {
+        LogError("GCN ISO: short write.");
+        return false;
+    }
+
+    LogDebug("GCN ISO written: %s", isoPath.c_str());
+    return true;
 }
 
 void ActionManager::BuildData(Platform platform, bool embedded)
@@ -651,6 +967,24 @@ void ActionManager::BuildData(Platform platform, bool embedded)
         LogError("Packaged executable not found: %s", (packagedDir + projectName + extension).c_str());
         LogError("Packaging failed. Please check the log for errors.");
         return;
+    }
+
+    // ( ) GameCube: stitch the packaged tree into a bootable disc image so the
+    // game reads its assets straight off the disc FST (no SD card required).
+    if (platform == Platform::GameCube)
+    {
+        std::string apploaderPath = octaveDirectory + "Standalone/Tools/gcn_apploader.img";
+        std::string dolPath = packagedDir + projectName + ".dol";
+        std::string isoPath = packagedDir + projectName + ".iso";
+
+        if (BuildGameCubeIso(packagedDir, dolPath, apploaderPath, isoPath, projectName))
+        {
+            LogDebug("GameCube disc image ready: %s", isoPath.c_str());
+        }
+        else
+        {
+            LogWarning("GameCube disc image was not created (see log). The .dol + Packaged folder are still valid for SD/Swiss.");
+        }
     }
       if(!IsHeadless()){
                 // Show the build output directory

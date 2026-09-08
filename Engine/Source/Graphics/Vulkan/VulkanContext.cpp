@@ -159,7 +159,12 @@ void VulkanContext::Initialize()
 
 #if EDITOR
 
+    // Skip all ImGui backend init in headless mode -- there is no ImGui context
+    // (EditorImguiInit() early-returns when headless), so ImGui_ImplVulkan_Init's
+    // internal ImGui::GetIO() would assert. Headless only cooks/packages assets.
+    if (!IsHeadless())
     {
+        {
         // Create descriptor pool for imgui
         VkDescriptorPoolSize poolSizes[5] = {};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
@@ -211,6 +216,7 @@ void VulkanContext::Initialize()
         DeviceWaitIdle();
         ImGui_ImplVulkan_DestroyFontUploadObjects();
     }
+    } // if (!IsHeadless())
 #endif
 
     DeviceWaitIdle();
