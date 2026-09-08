@@ -15,6 +15,7 @@
 #include "Profiler.h"
 
 class Widget;
+class Quad;
 class Console;
 class StatsOverlay;
 class CameraFrustum;
@@ -38,6 +39,7 @@ public:
     static Renderer* Get();
 
     void Render(World* world, int32_t screenIndex);
+    void RenderSplashIntro(World* world);
     ~Renderer();
     void Initialize();
 
@@ -196,8 +198,17 @@ private:
 
     void UpdateDebugDraws();
 
+    void InitSplash();
+    void UpdateSplash();
+
     SharedPtr<StatsOverlay> mStatsWidget;
     SharedPtr<Console> mConsoleWidget;
+
+    // "Powered by Octave" boot splash (packaged games only).
+    SharedPtr<Quad> mSplashWidget;
+    TextureRef mSplashTexture;
+    float mSplashTimer = 0.0f;
+    bool mSplashActive = false;
 
     EngineState* mEngineState = nullptr;
 

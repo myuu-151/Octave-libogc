@@ -275,6 +275,7 @@ struct EngineConfig
     bool mLogging = true;
     bool mLogToFile = false;
     bool mScriptHotReload = false;
+    bool mShowSplash = true;   // "Powered by Octave" boot splash (packaged games)
 
     int32_t mLqMaxTextureSize = 0;
     bool mLqEnableMipMaps = true;

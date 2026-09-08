@@ -458,6 +458,10 @@ bool Initialize()
     ForceLinkage();
 
 #if !EDITOR
+    // Play the boot splash over a clean black screen before the (blocking) scene
+    // load, so it shows first and the screen stays black through the load.
+    Renderer::Get()->RenderSplashIntro(GetWorld(0));
+
     Scene* defaultScene = nullptr;
 
     // If a given default scene was provided via config, load that one.
@@ -1064,6 +1068,7 @@ void WriteEngineConfig(std::string path)
         fprintf(configIni, "EditorInterfaceScale=%f\n", sEngineConfig.mEditorInterfaceScale);
         fprintf(configIni, "ScriptHotReload=%d\n", sEngineConfig.mScriptHotReload);
         fprintf(configIni, "ColorScale=%d\n", sEngineConfig.mColorScale);
+        fprintf(configIni, "ShowSplash=%d\n", sEngineConfig.mShowSplash);
 
         fclose(configIni);
         configIni = nullptr;
@@ -1174,6 +1179,8 @@ void ReadEngineConfig(std::string path)
                 sEngineConfig.mScriptHotReload = strToBool(value);
             else if (keyStr == "ColorScale")
                 sEngineConfig.mColorScale = atoi(value);
+            else if (keyStr == "ShowSplash")
+                sEngineConfig.mShowSplash = strToBool(value);
 
             strcpy(key, "");
             strcpy(value, "");

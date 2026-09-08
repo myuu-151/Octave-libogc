@@ -7,6 +7,7 @@
 #include "Nodes/Widgets/Widget.h"
 #include "Nodes/Widgets/Console.h"
 #include "Nodes/Widgets/StatsOverlay.h"
+#include "Nodes/Widgets/Quad.h"
 #include "Assets/Font.h"
 #include "Nodes/3D/PointLight3d.h"
 #include "Nodes/3D/Primitive3d.h"
@@ -124,6 +125,97 @@ void Renderer::Initialize()
 #endif
 
     SetColorScale((float)GetEngineConfig()->mColorScale);
+
+    InitSplash();
+}
+
+// "Powered by Octave" boot splash. Only shown in packaged games (not the editor),
+// and only if the T_OctaveSplash engine texture exists. Pops up, holds, then
+// fades to black -- then the scene loads. Toggle with ShowSplash=0 in Config.ini.
+
+// Timeline (seconds), advanced at a fixed step per rendered frame.
+static const float kSplashHoldEnd = 3.00f;   // pop up + hold (~3s)
+static const float kSplashFadeEnd = 3.65f;   // fade to black
+static const float kSplashStep    = 1.0f / 60.0f;
+
+void Renderer::InitSplash()
+{
+#if !EDITOR
+    if (!GetEngineConfig()->mShowSplash)
+        return;
+
+    mSplashTexture = LoadAsset("T_OctaveSplash");
+    if (mSplashTexture.Get() == nullptr)
+        return; // asset not present -> no splash, no crash
+
+    mSplashWidget = Node::Construct<Quad>();
+    if (mSplashWidget == nullptr)
+        return;
+
+    mSplashWidget->SetTexture((Texture*)mSplashTexture.Get());
+    mSplashWidget->SetAnchorMode(AnchorMode::TopLeft);
+    mSplashWidget->SetPosition(0.0f, 0.0f);
+    // Stretch anchors compute to zero size for a top-level widget, so size it
+    // explicitly (updated every frame in UpdateSplash).
+    mSplashWidget->SetColor(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+    mSplashWidget->SetVisible(true);
+
+    mSplashTimer = 0.0f;
+    mSplashActive = true;
+#endif
+}
+
+// Advance one frame of the splash animation and keep the quad full-screen.
+void Renderer::UpdateSplash()
+{
+    if (!mSplashActive || mSplashWidget == nullptr)
+        return;
+
+    mSplashTimer += kSplashStep;
+
+    glm::uvec4 vp = GetViewport();
+    float sw = (vp.z > 0) ? (float)vp.z : (float)GetEngineState()->mWindowWidth;
+    float sh = (vp.w > 0) ? (float)vp.w : (float)GetEngineState()->mWindowHeight;
+    mSplashWidget->SetPosition(0.0f, 0.0f);
+    mSplashWidget->SetDimensions(sw, sh);
+
+    const float t = mSplashTimer;
+    float alpha;
+    if (t < kSplashHoldEnd)
+        alpha = 1.0f;                                                            // pop up + hold
+    else if (t < kSplashFadeEnd)
+        alpha = 1.0f - (t - kSplashHoldEnd) / (kSplashFadeEnd - kSplashHoldEnd); // fade to black
+    else
+        alpha = 0.0f;
+
+    mSplashWidget->SetColor(glm::vec4(1.0f, 1.0f, 1.0f, alpha));
+    mSplashWidget->MarkDirty();
+
+    if (t >= kSplashFadeEnd)
+    {
+        mSplashActive = false;
+        mSplashWidget->SetVisible(false);
+    }
+}
+
+// Play the whole splash (pop -> hold -> fade to black) over a clean black screen
+// BEFORE the scene loads, so it shows first. Restores the clear color afterward.
+void Renderer::RenderSplashIntro(World* world)
+{
+    if (!mSplashActive || mSplashWidget == nullptr || world == nullptr)
+        return;
+
+    glm::vec4 prevClear = GetClearColor();
+    SetClearColor(glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+
+    int guard = 0;
+    while (mSplashActive && guard < 600)
+    {
+        Render(world, 0);   // empty world + splash overlay, one vsynced frame
+        guard++;
+    }
+
+    SetClearColor(prevClear);
 }
 
 void Renderer::GatherProperties(std::vector<Property>& props)
@@ -646,6 +738,7 @@ void Renderer::GatherDrawData(World* world)
 
             if (mStatsWidget != nullptr && mStatsWidget->IsVisible()) { mStatsWidget->Traverse(gatherDrawData); }
             if (mConsoleWidget != nullptr && mConsoleWidget->IsVisible()) { mConsoleWidget->Traverse(gatherDrawData); }
+            if (mSplashWidget != nullptr && mSplashActive && mSplashWidget->IsVisible()) { mSplashWidget->Traverse(gatherDrawData); }
 
 #if EDITOR
             // Kinda hacky but doing this to draw overlay text when in editor.
@@ -1208,6 +1301,9 @@ void Renderer::Render(World* world, int32_t screenIndex)
 
         if (mStatsWidget != nullptr && mStatsWidget->IsVisible()) { mStatsWidget->PrepareTick(sTickNodes, inGame, true); }
         if (mConsoleWidget != nullptr && mConsoleWidget->IsVisible()) { mConsoleWidget->PrepareTick(sTickNodes, inGame, true); }
+
+        UpdateSplash();
+        if (mSplashWidget != nullptr && mSplashActive && mSplashWidget->IsVisible()) { mSplashWidget->PrepareTick(sTickNodes, inGame, true); }
 
         for (uint32_t i = 0; i < sTickNodes.size(); ++i)
         {

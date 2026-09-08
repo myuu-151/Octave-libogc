@@ -64,6 +64,12 @@ void SYS_Initialize()
     system.mFrameBuffers[0] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
     system.mFrameBuffers[1] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
 
+    // Clear both framebuffers to black up front. A freshly allocated XFB is
+    // uninitialized, and all-zero YUV shows as green -- without this you get a
+    // green flash before the first frame is rendered.
+    VIDEO_ClearFrameBuffer(rmode, system.mFrameBuffers[0], COLOR_BLACK);
+    VIDEO_ClearFrameBuffer(rmode, system.mFrameBuffers[1], COLOR_BLACK);
+
     VIDEO_Configure(&system.mGxRmode);
     VIDEO_SetNextFramebuffer(system.mFrameBuffers[system.mFrameIndex]);
     VIDEO_SetBlack(false);
