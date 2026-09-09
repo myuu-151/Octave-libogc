@@ -59,6 +59,10 @@ void SoundWave::LoadStream(Stream& stream, Platform platform)
     mAudioClass = stream.ReadInt8();
     mCompress = stream.ReadBool();
     mCompressInternal = stream.ReadBool();
+    if (stream.GetAssetVersion() >= ASSET_VERSION_SOUND_STREAM)
+    {
+        mStream = stream.ReadBool();
+    }
 
     // Waveform Format
     mNumChannels = stream.ReadUint32();
@@ -81,6 +85,19 @@ void SoundWave::LoadStream(Stream& stream, Platform platform)
         mCompressedData = new uint8_t[compressedSize];
         mCompressedSize = compressedSize;
         memcpy(mCompressedData, stream.GetData() + stream.GetPos(), compressedSize);
+#elif PLATFORM_DOLPHIN
+        if (mStream)
+        {
+            // Streamed sound: keep the compressed Vorbis in RAM and decode it on
+            // the fly at playback (see Audio_Dolphin). Skips the full PCM decode,
+            // so a long track costs its compressed size (~KB) instead of MBs of
+            // decoded PCM.
+            mCompressedData = new uint8_t[compressedSize];
+            mCompressedSize = compressedSize;
+            memcpy(mCompressedData, stream.GetData() + stream.GetPos(), compressedSize);
+            AUD_ProcessWaveBuffer(this);
+            return;
+        }
 #endif
 
         Stream outStream;
@@ -92,6 +109,15 @@ void SoundWave::LoadStream(Stream& stream, Platform platform)
 
         mWaveDataSize = outStream.GetSize();
         mWaveData = AUD_AllocWaveBuffer(mWaveDataSize);
+        if (mWaveData == nullptr)
+        {
+            // Too large to fit in RAM. Fail gracefully instead of writing to null.
+            LogError("SoundWave '%s': could not allocate %u bytes of decoded audio "
+                     "(too large for RAM). Enable Stream on this sound.",
+                     GetName().c_str(), mWaveDataSize);
+            mWaveDataSize = 0;
+            return;
+        }
         memcpy(mWaveData, outStream.GetData(), mWaveDataSize);
     }
     else
@@ -99,6 +125,13 @@ void SoundWave::LoadStream(Stream& stream, Platform platform)
         // Waveform
         mWaveDataSize = stream.ReadUint32();
         mWaveData = AUD_AllocWaveBuffer(mWaveDataSize);
+        if (mWaveData == nullptr)
+        {
+            LogError("SoundWave '%s': could not allocate %u bytes of audio.",
+                     GetName().c_str(), mWaveDataSize);
+            mWaveDataSize = 0;
+            return;
+        }
         for (uint32_t i = 0; i < mWaveDataSize; ++i)
         {
             mWaveData[i] = stream.ReadUint8();
@@ -118,6 +151,7 @@ void SoundWave::SaveStream(Stream& stream, Platform platform)
     stream.WriteInt8(mAudioClass);
     stream.WriteBool(mCompress);
     stream.WriteBool(mCompressInternal);
+    stream.WriteBool(mStream);
 
     uint32_t numChannels = mNumChannels;
     uint32_t bitsPerSample = mBitsPerSample;
@@ -396,6 +430,7 @@ void SoundWave::GatherProperties(std::vector<Property>& outProps)
     outProps.push_back(Property(DatumType::Byte, "Audio Class", this, &mAudioClass, 1, HandlePropChange));
     outProps.push_back(Property(DatumType::Bool, "Compress", this, &mCompress, 1, HandlePropChange));
     outProps.push_back(Property(DatumType::Bool, "Compress Internal", this, &mCompressInternal, 1, HandlePropChange));
+    outProps.push_back(Property(DatumType::Bool, "Stream", this, &mStream, 1, HandlePropChange));
 }
 
 glm::vec4 SoundWave::GetTypeColor()
@@ -489,6 +524,21 @@ uint32_t SoundWave::GetNumSamples() const
 float SoundWave::GetDuration() const
 {
     return float(mNumSamples) / mSampleRate;
+}
+
+bool SoundWave::GetStream() const
+{
+    return mStream;
+}
+
+const uint8_t* SoundWave::GetCompressedData() const
+{
+    return mCompressedData;
+}
+
+uint32_t SoundWave::GetCompressedSize() const
+{
+    return mCompressedSize;
 }
 
 uint32_t SoundWave::GetBlockAlign() const

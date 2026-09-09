@@ -43,6 +43,10 @@ public:
 
     float GetDuration() const;
 
+    bool GetStream() const;
+    const uint8_t* GetCompressedData() const;
+    uint32_t GetCompressedSize() const;
+
 protected:
 
     static bool HandlePropChange(Datum* datum, uint32_t index, const void* newValue);
@@ -59,6 +63,7 @@ protected:
     int8_t mAudioClass = 0;
     bool mCompress = false;
     bool mCompressInternal = false;
+    bool mStream = false;   // Stream-decode compressed audio on console (music)
 
     // Soundwave Format
     uint32_t mNumChannels = 1;
