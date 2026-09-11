@@ -386,7 +386,16 @@ static bool BuildGameCubeIso(const std::string& packagedDir,
     Put32(img, 0x0428, fstSize);
     Put32(img, 0x042C, fstSize);                   // FST max size (single-disc)
 
-    // --- bi2.bin --- left zeroed (0x0440 .. 0x2440)
+    // --- bi2.bin (disc info, 0x0440 .. 0x2440) ---
+    // The real console's BS2 reads these to set up the OS/memory environment
+    // before the game runs. All-zero boots on Dolphin (it fakes BS2) but crashes
+    // on hardware at the boot logo because the memory config comes out invalid.
+    Put32(img, 0x0440 + 0x00, 0x00000000);         // debug monitor size
+    Put32(img, 0x0440 + 0x04, 0x01800000);         // simulated memory size = 24 MB
+    Put32(img, 0x0440 + 0x08, 0x00000000);         // argument offset
+    Put32(img, 0x0440 + 0x0C, 0x00000000);         // debug flag (0 = retail)
+    Put32(img, 0x0440 + 0x18, 0x00000001);         // country code (1 = USA/NTSC)
+    Put32(img, 0x0440 + 0x1C, 0x00000001);         // (long filenames / version)
 
     // --- apploader ---
     if (!ReadHostFile(apploaderPath, &img[kApploaderOff], apploaderSize))

@@ -17,8 +17,24 @@
 #include <fat.h>
 #include <string>
 #include <string.h>
+#include <stdarg.h>
 
 #define ENABLE_LIBOGC_CONSOLE 0
+
+// DIAGNOSTIC: append one line to a log file on the SD root (the default FAT
+// device). Opens+closes every call so the log survives a later crash -- boot,
+// let it fail, pull the SD, read octlog.txt on a PC.
+static void DvdLog(const char* fmt, ...)
+{
+    FILE* f = fopen("octlog.txt", "a");
+    if (f == nullptr) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(f, fmt, ap);
+    va_end(ap);
+    fputc('\n', f);
+    fclose(f);
+}
 
 static bool sFatInit = false;
 static void InitFAT()
@@ -36,6 +52,8 @@ static void InitFAT()
         }
     }
 }
+
+static void SYS_ShowDvdDiag();   // DIAGNOSTIC: paint FST-mount result as a screen color
 
 void SYS_Initialize()
 {
@@ -88,6 +106,8 @@ void SYS_Initialize()
 #endif
 
     InitFAT();
+
+    SYS_ShowDvdDiag();   // DIAGNOSTIC: hold a status color on-screen (~3s) before boot
 }
 
 void SYS_Shutdown()
@@ -117,6 +137,8 @@ void SYS_Update()
 // ---------------------------------------------------------------------------
 
 static bool        sDvdActive = false;   // a valid boot FST was found
+static volatile int sDvdDiag  = 0;       // DIAGNOSTIC: how far InitDVD got (screen color)
+static bool        sDvdVideoReady = false; // DIAGNOSTIC: gate DVD access until video is up
 static u8*         sFst       = nullptr; // our owned copy of the FST
 static const char* sFstStr    = nullptr; // string table within sFst
 static u32         sFstCount  = 0;       // number of FST entries
@@ -147,68 +169,155 @@ static int sDvdAttempts = 0;
 
 static void InitDVD()
 {
+    // DIAGNOSTIC: never touch the drive before video is up, so a fault here is
+    // visible as a frozen screen color instead of a pre-video "no signal".
+    if (!sDvdVideoReady) return;
     if (sDvdActive) return;             // already mounted
     if (sDvdAttempts >= 32) return;     // give up (e.g. SD-only system, no disc)
     sDvdAttempts++;
 
-    // The very first file access happens before libogc's DVD driver is fully up,
-    // so the read can fail. Do NOT latch on failure -- retry on later accesses
-    // until the drive is ready and the mount succeeds.
+    DvdLog("InitDVD: attempt %d", sDvdAttempts);
+
+    // Set up the DVD driver. This alone does NOT reset/spin the physical drive.
     DVD_Init();
+    DvdLog("  DVD_Init() returned");
 
-    // The drive must be mounted (reset + disc ID read) before DVD_ReadPrio will
-    // return data -- DVD_Init() alone leaves reads failing with -1.
-    DVD_Mount();
-
-    // Read the disc boot header (boot.bin) ourselves to locate the FST, rather
-    // than trusting the OS low-mem globals at 0x80000038 -- the apploader sets
-    // those, but libogc's own init clears them before the game runs. Reading the
-    // header straight off the disc is self-contained and works on hardware too.
+    // Read the disc boot header (boot.bin) to locate the FST. Try the absolute
+    // read WITHOUT mounting first: under Swiss's DI emulation the disc is already
+    // "present", so this read is intercepted -- no drive reset, no real laser
+    // seek. On Dolphin this first read returns -1 and we fall back to DVD_Mount()
+    // (which resets the drive) only then. This avoids the reset that was leaking
+    // to the real drive under Swiss and faulting on hardware.
     u8* boot = (u8*)memalign(32, 0x440);
-    if (boot == nullptr) return;
+    if (boot == nullptr) { DvdLog("  boot memalign FAILED"); sDvdDiag = 5; return; }
 
-    if (DVD_ReadPrio(&sDvdBlk, boot, 0x440, 0, 2) < 0)
+    bool usedMount = false;
+    s32 rc = DVD_ReadPrio(&sDvdBlk, boot, 0x440, 0, 2);
+    DvdLog("  read boot.bin (no mount): rc=%ld", (long)rc);
+    if (rc < 0)
     {
-        free(boot);
-        return;
+        DvdLog("  first read failed -> DVD_Mount()");
+        DVD_Mount();        // drive reset + disc-ID read (needed on Dolphin)
+        usedMount = true;
+        rc = DVD_ReadPrio(&sDvdBlk, boot, 0x440, 0, 2);
+        DvdLog("  read boot.bin (after mount): rc=%ld", (long)rc);
+        if (rc < 0)
+        {
+            free(boot);
+            sDvdDiag = 1;   // RED: read failed even after mount
+            return;
+        }
     }
+
+    DvdLog("  boot[0..3]=%02X %02X %02X %02X  magic@1C=%02X%02X%02X%02X",
+           boot[0], boot[1], boot[2], boot[3],
+           boot[0x1C], boot[0x1D], boot[0x1E], boot[0x1F]);
 
     u32 fstOffset = FstU32(boot, 0x424);
     u32 fstSize   = FstU32(boot, 0x428);
     free(boot);
+    DvdLog("  fstOffset=0x%08lX fstSize=0x%08lX", (unsigned long)fstOffset, (unsigned long)fstSize);
 
     if (fstOffset < 0x440 || fstSize < 12)
     {
+        sDvdDiag = 4;   // WHITE: read succeeded but boot header offsets are garbage
         return;
     }
 
     u32 fstAligned = (fstSize + 31) & ~31u;
     sFst = (u8*)memalign(32, fstAligned);
-    if (sFst == nullptr) return;
+    if (sFst == nullptr) { DvdLog("  FST memalign(%lu) FAILED", (unsigned long)fstAligned); sDvdDiag = 5; return; }
 
-    if (DVD_ReadPrio(&sDvdBlk, sFst, fstAligned, (s64)fstOffset, 2) < 0)
+    rc = DVD_ReadPrio(&sDvdBlk, sFst, fstAligned, (s64)fstOffset, 2);
+    DvdLog("  read FST: rc=%ld", (long)rc);
+    if (rc < 0)
     {
         free(sFst);
         sFst = nullptr;
+        sDvdDiag = 1;   // RED: FST read failed
         return;
     }
 
     // Root entry must be a directory; its length field holds the total entry count.
     if (!FstIsDir(sFst))
     {
-        free(sFst); sFst = nullptr; return;
+        DvdLog("  FST root not a dir (byte0=%02X)", sFst[0]);
+        free(sFst); sFst = nullptr; sDvdDiag = 4; return;   // WHITE: FST corrupt
     }
     u32 count = FstU32(sFst, 8);
+    DvdLog("  FST root count=%lu", (unsigned long)count);
     if (count == 0 || (u64)count * 12 > fstSize)
     {
-        free(sFst); sFst = nullptr; return;
+        free(sFst); sFst = nullptr; sDvdDiag = 4; return;   // WHITE: FST corrupt
     }
 
     sFstCount = count;
     sFstStr   = (const char*)(sFst + count * 12);
     sDvdActive = true;
+    DvdLog("  MOUNTED OK: %lu entries (usedMount=%d)", (unsigned long)count, usedMount ? 1 : 0);
+    // GREEN: served without a mount (Swiss path).  BLUE: needed DVD_Mount (Dolphin).
+    sDvdDiag  = usedMount ? 2 : 10;
 
     LogDebug("Disc FST mounted: %u entries.", count);
+}
+
+// ---------------------------------------------------------------------------
+// DIAGNOSTIC (temporary): now that video is up, force a disc-FST mount attempt
+// and show the result on-screen. COLORBLIND-SAFE: uses only WHITE / BLUE /
+// YELLOW (no red or green), and SOLID vs FLASHING to carry the sub-detail so it
+// reads with no color discrimination at all.
+//
+//   Step 1: a ~1.5s WHITE flash  = "reached the diagnostic, video OK".
+//   Step 2: the result, held ~4s:
+//     SOLID  BLUE   = FST mounted WITHOUT a drive reset (the Swiss win!)
+//     FLASH  BLUE   = FST mounted, but needed DVD_Mount's reset (laser path)
+//     SOLID  YELLOW = DVD read failed entirely
+//     FLASH  YELLOW = read OK but FST/offsets bad (or out of memory)
+//     NO SIGNAL after the white = InitDVD itself faults (DVD calls crash HW)
+//     NO WHITE at all           = crash before video / diagnostic never reached
+//
+//   Simple read: BLUE = mounted (good), YELLOW = failed (bad);
+//                SOLID = clean, FLASHING = "but with a caveat".
+// ---------------------------------------------------------------------------
+static void SysPaint(SystemState& system, u32 color, int frames)
+{
+    VIDEO_ClearFrameBuffer(&system.mGxRmode, system.mFrameBuffers[0], color);
+    VIDEO_ClearFrameBuffer(&system.mGxRmode, system.mFrameBuffers[1], color);
+    VIDEO_SetNextFramebuffer(system.mFrameBuffers[system.mFrameIndex]);
+    VIDEO_Flush();
+    for (int f = 0; f < frames; ++f) VIDEO_WaitVSync();
+}
+
+static void SysFlash(SystemState& system, u32 color, int cycles)
+{
+    for (int c = 0; c < cycles; ++c)
+    {
+        SysPaint(system, color,       18);   // ~0.3s on
+        SysPaint(system, COLOR_BLACK, 12);   // ~0.2s off
+    }
+}
+
+static void SYS_ShowDvdDiag()
+{
+    SystemState& system = GetEngineState()->mSystem;
+
+    sDvdVideoReady = true;                 // video is up -- allow DVD access now
+
+    DvdLog("==== boot: DVD diagnostic reached (video up, SD writable) ====");
+    SysPaint(system, COLOR_WHITE, 90);     // ~1.5s "reached diagnostic" flash
+
+    InitDVD();                             // the risky part
+    DvdLog("==== InitDVD returned: sDvdDiag=%d sDvdActive=%d ====", sDvdDiag, sDvdActive ? 1 : 0);
+
+    switch (sDvdDiag)
+    {
+    case 10: SysPaint(system, COLOR_BLUE,   240); break;  // SOLID BLUE  : mounted, no reset (WIN)
+    case 2:  SysFlash(system, COLOR_BLUE,   8);   break;  // FLASH BLUE  : mounted, needed reset
+    case 1:  SysPaint(system, COLOR_YELLOW, 240); break;  // SOLID YELLOW: read failed
+    case 4:
+    case 5:  SysFlash(system, COLOR_YELLOW, 8);   break;  // FLASH YELLOW: read OK but data bad
+    default: SysPaint(system, COLOR_BLACK,  240); break;  // no status
+    }
 }
 
 // Resolve a slash-separated path (relative to the disc root) to its data.
