@@ -235,3 +235,99 @@ ISO → the FST mounts. Everything downstream (asset loads, scene) just works.
 - **Dolphin can't help here:** it's too lenient to reproduce the failure, and
   Swiss's own low-level tricks don't run faithfully inside it (Swiss's input was
   dead when we tried). Real hardware + SD log is the debugging path.
+
+---
+
+# Addendum — The Full Process: Everything It Took
+
+A retrospective of the whole path from "it crashes" to "a patched Swiss that
+builds," so the *process* (not just the conclusion) is on record.
+
+## Phase 0 — Starting point
+Octave could ship a GameCube ISO whose assets live on the disc FST, with a
+runtime reader (`InitDVD`/`DVD_ReadPrio` in `System_Dolphin.cpp`) + an apploader
++ a GCM builder. It worked in Dolphin. On real hardware (PicoLoader + Swiss +
+empty drive) it crashed. Goal: make the on-disc read work on that rig.
+
+## Phase 1 — Proving *where* it fails (no USB Gecko)
+With no serial debugger, we built visibility from scratch:
+1. **On-screen color diagnostic** — paint the framebuffer a status color from
+   `InitDVD`, held after video init. Required knowing libogc VI
+   (`VIDEO_ClearFrameBuffer`, framebuffer aliases) and gating DVD access until
+   video was up so a fault showed as a frozen color, not a pre-video "no signal".
+2. **Colorblind redesign** — user is red-green colorblind and read "yellow" as
+   "green". Rebuilt the scheme on the blue/yellow axis + solid-vs-flashing, which
+   needs no color discrimination at all.
+3. **SD-card logger** — `DvdLog()` appends to `octlog.txt` on the FAT SD, opening
+   and closing per line so a later crash can't lose the trace. This gave the
+   ground truth: `DVD_ReadPrio` returns **rc=-1**, or hangs outright.
+4. **Exception-dump decode** — read PC/DAR/DSISR off the crash screen, mapped PC
+   with `addr2line` to `StaticMesh::SetCollisionShape` via `LoadDefaultMeshes` —
+   confirming the crash was the *downstream* null (no assets), not the cause.
+
+## Phase 2 — Understanding Swiss (source dive)
+Cloned swiss-gc and read the patcher/emulator:
+- Swiss emulates the disc in **software**: a DSI handler at `0x80000300`
+  (`emulator.c`) traps I/O-register access, and — primarily — it **rewrites the
+  game's SDK disc functions** to read from the SD ISO.
+- It finds those functions by an **instruction-count fingerprint**
+  (`make_pattern`, patcher.c:499 → `{Length,Loads,Stores,FCalls,Branch,Moves}`),
+  with a table of SDK signatures (and even SN Systems ProDG — so non-Nintendo
+  toolchains *can* be added).
+- libogc isn't in that table, and libogc's low-level init tears down the DSI
+  trap, so its reads hit the real drive. That's the whole bug.
+
+## Phase 3 — Measuring libogc
+Reimplemented Swiss's `make_pattern` in Python (`make_fp.py`), fed it
+`objdump -d` of `Octave.elf`, and fingerprinted libogc's disc functions. Result:
+they do **not** match the SDK signatures (`DVD_ReadPrio = {60,12,11,2,6,4}`),
+proving the easy "just add signatures" path was closed and a custom patch was
+needed.
+
+## Phase 4 — Designing the fix
+Chose to hook libogc's **synchronous** `DVD_ReadPrio` (no interrupt/callback flow
+to emulate) and serve it directly:
+- **Reverse-engineered the ABI** by disassembling the call sites in our own
+  binary: `r4=buf, r5=len, r7:r8=s64 offset, r9=prio`, return in `r3` (callers
+  only test `< 0`). Not the SysV default — there's a register gap at r6.
+- Found Swiss's synchronous primitive **`frag_read_complete(*VAR_CURRENT_DISC,
+  buf, len, offset)`** and its cache trick (read via the uncached `0xC0000000`
+  alias, like `perform_read` does).
+- Learned Swiss's game→runtime call convention: base runtime has a **jump table
+  at fixed offsets** (`patcher.h`: `FINI = LO_RESERVE + 0x110` …), and the
+  patcher redirects a found function with `data[i] = branch(TARGET, addr)`.
+
+## Phase 5 — The build path (beating the CDN block)
+Local Swiss builds need libogc2 + PPC libs from `pkg.devkitpro.org`, which began
+**403-ing both the sandbox and the user's own machine** (WAF/rate-limit). Solved
+it by not building locally at all: **fork's GitHub Actions** builds inside
+`ghcr.io/extremscorner/libogc2` (toolchain baked in), `make` → artifact. Verified
+a stock build (~2 min). This also gave a validation loop — push, read the CI log,
+fix, repeat — instead of guessing blind.
+
+## Phase 6 — Wiring + CI iteration
+Four edits to the fork:
+- `base.S`: new jump-table slot `b DVDReadPrio_libogc`.
+- `patcher.h`: `DVD_READPRIO_LIBOGC = LO_RESERVE + 0x114`.
+- `frag.c`: the shim (libogc-ABI C params → `frag_read_complete` → `dcbi`
+  invalidate → return len/-1).
+- `patcher.c`: the `{60,12,11,2,6,4}` FuncPattern + a standalone scan that
+  `branch()`es the game's `DVD_ReadPrio` to the shim.
+
+First CI build **failed**: `undefined reference to DVDReadPrio_libogc` when
+linking `dvd.bin` — the shim was in `blockdevice.o`, which isn't linked into
+every device image; `frag.o` is (52/52). Moved the shim to `frag.c`; second build
+**succeeded** → patched `swiss_r2113.dol`.
+
+## Tools / skills the process required
+PPC assembly + the GameCube ABI; ELF disassembly (`objdump`, `nm`, `addr2line`);
+reimplementing a signature algorithm to match a foreign codebase; reading Swiss's
+patcher/emulator internals; libogc DVD + VI; FAT/SD logging; the GitHub Data API
+and Actions (fork, enable, dispatch, watch, download); and a lot of blind-console
+diagnostics discipline (make every failure observable).
+
+## Still unproven (the honest edge)
+The patched Swiss **compiles and links** — it has **not** been shown to work on
+hardware. Open runtime questions: does Swiss's live scan match `{60,12,11,2,6,4}`
+in the game; is the ABI mapping exactly right; is the cache handling sufficient.
+The SD logger will answer all three on the first real boot.
