@@ -340,10 +340,11 @@ void SoundWave::Destroy()
     if (mCompressedData != nullptr)
     {
 #if !EDITOR
-        // We should only have compressed data in EDITOR.
-        OCT_ASSERT(0);
+        // Compressed data is normally editor-only, but streamed sounds keep it on
+        // console too (decoded on the fly at playback -- see Audio_Dolphin).
+        OCT_ASSERT(mStream);
 #endif
-        delete mCompressedData;
+        delete[] mCompressedData;
     }
 }
 

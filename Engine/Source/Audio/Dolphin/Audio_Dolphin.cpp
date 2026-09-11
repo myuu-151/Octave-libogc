@@ -39,6 +39,7 @@ struct StreamVoice
     bool           active = false;
     OggVorbis_File vf;
     MemSource      mem;
+    uint8_t*       memOwned = nullptr;   // private copy of the compressed Vorbis
     uint8_t*       buf[2] = { nullptr, nullptr };
     uint32_t       bufSize = 0;
     int            nextBuf = 0;
@@ -115,6 +116,7 @@ static void StreamStop(StreamVoice* sv)
     ov_clear(&sv->vf);
     if (sv->buf[0]) { free(sv->buf[0]); sv->buf[0] = nullptr; }
     if (sv->buf[1]) { free(sv->buf[1]); sv->buf[1] = nullptr; }
+    if (sv->memOwned) { free(sv->memOwned); sv->memOwned = nullptr; }
     sv->active = false;
     sv->eof = false;
 }
@@ -199,14 +201,32 @@ void AUD_Play(
         StreamVoice* sv = &sStreams[voiceIndex];
         StreamStop(sv);   // clean any previous stream on this voice
 
-        sv->mem.data = soundWave->GetCompressedData();
-        sv->mem.size = soundWave->GetCompressedSize();
+        // Own a private copy of the compressed Vorbis so the stream is independent
+        // of the SoundWave asset's lifetime. In non-embedded builds the asset can be
+        // swept (ref count -> 0) while the music is still playing; keeping the asset's
+        // pointer would dangle, and the freed block -- reused for other allocations --
+        // corrupts memory (scene-wide geometry collapse). Embedded never unloads
+        // assets, which is why this only bit non-embedded builds.
+        uint32_t compressedSize = soundWave->GetCompressedSize();
+        sv->memOwned = (uint8_t*)malloc(compressedSize);
+        if (sv->memOwned == nullptr)
+        {
+            LogError("SoundWave '%s': failed to allocate %u-byte stream copy.",
+                     soundWave->GetName().c_str(), compressedSize);
+            return;
+        }
+        memcpy(sv->memOwned, soundWave->GetCompressedData(), compressedSize);
+
+        sv->mem.data = sv->memOwned;
+        sv->mem.size = compressedSize;
         sv->mem.pos  = 0;
 
         ov_callbacks cb = { MemRead, MemSeek, MemClose, MemTell };
         if (ov_open_callbacks(&sv->mem, &sv->vf, NULL, 0, cb) < 0)
         {
             LogError("SoundWave '%s': failed to open Vorbis stream.", soundWave->GetName().c_str());
+            free(sv->memOwned);
+            sv->memOwned = nullptr;
             return;
         }
 
