@@ -15,8 +15,6 @@
 #include <stdio.h>
 #include <malloc.h>
 #include <fat.h>
-#include <string>
-#include <string.h>
 
 #define ENABLE_LIBOGC_CONSOLE 0
 
@@ -64,12 +62,6 @@ void SYS_Initialize()
     system.mFrameBuffers[0] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
     system.mFrameBuffers[1] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
 
-    // Clear both framebuffers to black up front. A freshly allocated XFB is
-    // uninitialized, and all-zero YUV shows as green -- without this you get a
-    // green flash before the first frame is rendered.
-    VIDEO_ClearFrameBuffer(rmode, system.mFrameBuffers[0], COLOR_BLACK);
-    VIDEO_ClearFrameBuffer(rmode, system.mFrameBuffers[1], COLOR_BLACK);
-
     VIDEO_Configure(&system.mGxRmode);
     VIDEO_SetNextFramebuffer(system.mFrameBuffers[system.mFrameIndex]);
     VIDEO_SetBlack(false);
@@ -100,245 +92,21 @@ void SYS_Update()
     GetEngineState()->mQuit = !SYS_MainLoop();
 }
 
-// ---------------------------------------------------------------------------
-// Disc (GCM/ISO) asset loading
-//
-// When the game boots from a real GameCube disc -- or a GCM in Dolphin/Swiss --
-// there is no SD card, and the cooked assets live inside the disc filesystem.
-// The apploader loads the disc's FST (File String Table) into main memory and
-// stores its address/size in the OS low-memory globals at 0x80000038/0x8000003C.
-// We copy that FST into our own buffer (the apploader's copy may sit in memory
-// the engine later allocates over), parse it to map an asset's relative path to
-// its absolute disc offset+length, and read it with DVD_ReadPrio.
-//
-// This is only used as a fallback: fopen() (libfat / SD) is always tried first,
-// so the existing SD-root layout and Dolphin's emulated SD keep working. Only a
-// real disc boot -- where fopen fails -- falls through to the FST reader.
-// ---------------------------------------------------------------------------
-
-static bool        sDvdActive = false;   // a valid boot FST was found
-static u8*         sFst       = nullptr; // our owned copy of the FST
-static const char* sFstStr    = nullptr; // string table within sFst
-static u32         sFstCount  = 0;       // number of FST entries
-static dvdcmdblk   sDvdBlk;
-
-static bool FstIsDir(const u8* e)          { return e[0] != 0; }
-static u32  FstNameOff(const u8* e)        { return (u32(e[1]) << 16) | (u32(e[2]) << 8) | u32(e[3]); }
-static u32  FstU32(const u8* e, int at)
-{
-    const u8* p = e + at;
-    return (u32(p[0]) << 24) | (u32(p[1]) << 16) | (u32(p[2]) << 8) | u32(p[3]);
-}
-
-static bool StrEqCI(const char* a, const char* b)
-{
-    while (*a && *b)
-    {
-        char ca = *a, cb = *b;
-        if (ca >= 'A' && ca <= 'Z') ca += 32;
-        if (cb >= 'A' && cb <= 'Z') cb += 32;
-        if (ca != cb) return false;
-        ++a; ++b;
-    }
-    return *a == 0 && *b == 0;
-}
-
-static int sDvdAttempts = 0;
-
-static void InitDVD()
-{
-    if (sDvdActive) return;             // already mounted
-    if (sDvdAttempts >= 32) return;     // give up (e.g. SD-only system, no disc)
-    sDvdAttempts++;
-
-    // The very first file access happens before libogc's DVD driver is fully up,
-    // so the read can fail. Do NOT latch on failure -- retry on later accesses
-    // until the drive is ready and the mount succeeds.
-    DVD_Init();
-
-    // The drive must be mounted (reset + disc ID read) before DVD_ReadPrio will
-    // return data -- DVD_Init() alone leaves reads failing with -1.
-    DVD_Mount();
-
-    // Read the disc boot header (boot.bin) ourselves to locate the FST, rather
-    // than trusting the OS low-mem globals at 0x80000038 -- the apploader sets
-    // those, but libogc's own init clears them before the game runs. Reading the
-    // header straight off the disc is self-contained and works on hardware too.
-    u8* boot = (u8*)memalign(32, 0x440);
-    if (boot == nullptr) return;
-
-    if (DVD_ReadPrio(&sDvdBlk, boot, 0x440, 0, 2) < 0)
-    {
-        free(boot);
-        return;
-    }
-
-    u32 fstOffset = FstU32(boot, 0x424);
-    u32 fstSize   = FstU32(boot, 0x428);
-    free(boot);
-
-    if (fstOffset < 0x440 || fstSize < 12)
-    {
-        return;
-    }
-
-    u32 fstAligned = (fstSize + 31) & ~31u;
-    sFst = (u8*)memalign(32, fstAligned);
-    if (sFst == nullptr) return;
-
-    if (DVD_ReadPrio(&sDvdBlk, sFst, fstAligned, (s64)fstOffset, 2) < 0)
-    {
-        free(sFst);
-        sFst = nullptr;
-        return;
-    }
-
-    // Root entry must be a directory; its length field holds the total entry count.
-    if (!FstIsDir(sFst))
-    {
-        free(sFst); sFst = nullptr; return;
-    }
-    u32 count = FstU32(sFst, 8);
-    if (count == 0 || (u64)count * 12 > fstSize)
-    {
-        free(sFst); sFst = nullptr; return;
-    }
-
-    sFstCount = count;
-    sFstStr   = (const char*)(sFst + count * 12);
-    sDvdActive = true;
-
-    LogDebug("Disc FST mounted: %u entries.", count);
-}
-
-// Resolve a slash-separated path (relative to the disc root) to its data.
-static bool FstFind(const char* relPath, u32& outOffset, u32& outLen)
-{
-    u32 dirIndex = 0;            // start at root
-    u32 dirEnd   = sFstCount;    // root subtree spans every entry
-
-    const char* p = relPath;
-    while (*p)
-    {
-        char comp[256];
-        int c = 0;
-        while (*p && *p != '/' && *p != '\\') { if (c < 255) comp[c++] = *p; ++p; }
-        comp[c] = 0;
-        while (*p == '/' || *p == '\\') ++p;
-        if (c == 0) continue;
-
-        bool last = (*p == 0);
-        bool found = false;
-
-        u32 i = dirIndex + 1;
-        while (i < dirEnd)
-        {
-            const u8* e = sFst + i * 12;
-            bool isDir = FstIsDir(e);
-            const char* name = sFstStr + FstNameOff(e);
-
-            if (StrEqCI(name, comp))
-            {
-                if (last)
-                {
-                    if (isDir) return false;    // wanted a file, hit a directory
-                    outOffset = FstU32(e, 4);
-                    outLen    = FstU32(e, 8);
-                    return true;
-                }
-                if (!isDir) return false;       // wanted a directory, hit a file
-                dirIndex = i;
-                dirEnd   = FstU32(e, 8);        // dir's "next index" bounds its subtree
-                found = true;
-                break;
-            }
-
-            i = isDir ? FstU32(e, 8) : (i + 1); // skip nested subtrees
-        }
-
-        if (!found) return false;
-    }
-
-    return false;
-}
-
-// Normalize an engine path (strip device/drive/leading-dot-slash) and resolve it
-// against the FST, tolerating any absolute prefix by retrying on shorter tails.
-static bool FstResolve(const char* path, u32& outOffset, u32& outLen)
-{
-    if (!sDvdActive) return false;
-
-    std::string s = path;
-    for (char& ch : s) { if (ch == '\\') ch = '/'; }
-
-    size_t colon = s.find(":/");           // strip "sd:/", "fat:/", "C:/" ...
-    if (colon != std::string::npos) s = s.substr(colon + 2);
-
-    while (!s.empty())
-    {
-        if (s[0] == '/')                                  s = s.substr(1);
-        else if (s.size() >= 2 && s[0] == '.' && s[1] == '/') s = s.substr(2);
-        else break;
-    }
-
-    while (!s.empty())
-    {
-        if (FstFind(s.c_str(), outOffset, outLen)) return true;
-        size_t slash = s.find('/');
-        if (slash == std::string::npos) return false;
-        s = s.substr(slash + 1);           // drop leading component, retry the tail
-    }
-
-    return false;
-}
-
-static bool DVD_ReadAsset(const char* path, int32_t maxSize, char*& outData, uint32_t& outSize)
-{
-    u32 offset = 0, len = 0;
-    if (!FstResolve(path, offset, len)) return false;
-
-    u32 readLen = len;
-    if (maxSize > 0 && (u32)maxSize < readLen) readLen = (u32)maxSize;
-
-    // DVD_ReadPrio requires 32-byte aligned buffer/length; the packer 32-byte
-    // aligns every file's data (and pads the image tail), so reading up to the
-    // next boundary never crosses into another file's meaningful bytes.
-    u32 aligned = (readLen + 31) & ~31u;
-    char* buf = (char*)memalign(32, aligned);
-    if (buf == nullptr) return false;
-
-    if (DVD_ReadPrio(&sDvdBlk, buf, aligned, (s64)offset, 2) < 0)
-    {
-        free(buf);
-        return false;
-    }
-
-    outData = buf;
-    outSize = readLen;
-    return true;
-}
-
 // Files
 bool SYS_DoesFileExist(const char* path, bool isAsset)
 {
     struct stat info;
+    bool exists = false;
+
     int32_t retStatus = stat(path, &info);
 
     if (retStatus == 0)
     {
         // If the file is actually a directory, than return false.
-        return !(info.st_mode & S_IFDIR);
+        exists = !(info.st_mode & S_IFDIR);
     }
 
-    // Fall back to the disc filesystem (disc boot with no SD).
-    InitDVD();
-    if (sDvdActive)
-    {
-        u32 offset = 0, len = 0;
-        if (FstResolve(path, offset, len)) return true;
-    }
-
-    return false;
+    return exists;
 }
 
 void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*& outData, uint32_t& outSize)
@@ -350,6 +118,8 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
     outSize = 0;
 
     FILE* file = fopen(path, "rb");
+
+    // TODO: Handle reading from ISO
 
     if (file != nullptr)
     {
@@ -372,13 +142,6 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
     }
     else
     {
-        // No SD / file not on the mounted filesystem -- try the disc FST.
-        InitDVD();
-        if (DVD_ReadAsset(path, maxSize, outData, outSize))
-        {
-            return;
-        }
-
         LogError("Failed to open file: %s", path);
     }
 }
