@@ -978,11 +978,52 @@ void ActionManager::BuildData(Platform platform, bool embedded)
         return;
     }
 
-    // GameCube ISO build DISABLED for now -- was auto-wrapping the DOL into a
-    // disc image after packaging. Re-enable by changing `if (false)` back to
-    // `if (platform == Platform::GameCube)`.
-    if (false)
+    // Wrap the packaged build into a bootable GameCube disc image (.iso) for both
+    // embedded and non-embedded GameCube builds. This is purely a build-time
+    // packaging step -- it adds no runtime disc access, so it cannot reintroduce
+    // the empty-drive laser skip (that came from System_Dolphin's DVD_Mount, which
+    // is reverted). The FST tree-walk picks up every packaged file, so embedded
+    // discs carry the DOL + banner and non-embedded discs also carry the assets.
+    if (platform == Platform::GameCube)
     {
+        // --- Banner: drop opening.bnr into the disc root (FST) so Swiss / Dolphin /
+        // the IPL show it. Prefer a project-supplied banner, else the engine default.
+        std::string bannerDst = packagedDir + "opening.bnr";
+        std::string bannerSrc = projectDir + "opening.bnr";
+        if (!SYS_DoesFileExist(bannerSrc.c_str(), false))
+            bannerSrc = octaveDirectory + "Standalone/Tools/opening.bnr";
+
+        if (SYS_DoesFileExist(bannerSrc.c_str(), false))
+        {
+            uint32_t bsz = GcmBuild::HostFileSize(bannerSrc);
+            std::vector<uint8_t> banner(bsz);
+            if (bsz >= 0x1960 && GcmBuild::ReadHostFile(bannerSrc, banner.data(), bsz))
+            {
+                // Stamp the project name into the BNR1 game-name fields (short name
+                // @0x1820/0x20, long title @0x1860/0x40) so the disc shows this
+                // project's name under the icon instead of a generic one.
+                auto stampName = [&](uint32_t off, uint32_t cap)
+                {
+                    for (uint32_t i = 0; i < cap; ++i)
+                        banner[off + i] = (i < projectName.size() && i + 1 < cap) ? (uint8_t)projectName[i] : 0;
+                };
+                stampName(0x1820, 0x20);
+                stampName(0x1860, 0x40);
+
+                FILE* bf = fopen(bannerDst.c_str(), "wb");
+                if (bf) { fwrite(banner.data(), 1, bsz, bf); fclose(bf);
+                          LogDebug("GCN ISO: banner opening.bnr included (%u bytes).", bsz); }
+            }
+            else
+            {
+                LogWarning("GCN ISO: banner %s is invalid/too small -- disc will have no banner.", bannerSrc.c_str());
+            }
+        }
+        else
+        {
+            LogDebug("GCN ISO: no opening.bnr found -- disc will have no banner.");
+        }
+
         std::string apploaderPath = octaveDirectory + "Standalone/Tools/gcn_apploader.img";
         std::string dolPath = packagedDir + projectName + ".dol";
         std::string isoPath = packagedDir + projectName + ".iso";
