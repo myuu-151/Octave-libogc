@@ -168,134 +168,20 @@ static int       sIsoMode = ISO_NONE;
 
 static bool IsoMounted() { return sIsoMode != ISO_NONE; }
 
-// ---- Minimal DVD reader (no libogc) ---------------------------------------
-// Read raw sectors straight off the physical disc by driving the DI (Drive
-// Interface) hardware registers at 0xCC006000. This links NOTHING from libogc's
-// DVD driver, so the DOL stays bootable via the disc apploader (see the note at
-// the top of the file). Requirements enforced by the DI DMA engine: disc offset
-// 4-byte aligned (we use 32), destination 32-byte aligned, length a multiple of
-// 32. After an apploader boot the drive is already spun up and the disc is
-// recognized (the IPL read the apploader + FST), so no reset/mount is needed.
-#define DI_REG(n)   (*(volatile uint32_t*)(0xCC006000 + (n)))
-#define DI_SR       DI_REG(0x00)   // status / interrupt
-#define DI_CMDBUF0  DI_REG(0x08)   // command
-#define DI_CMDBUF1  DI_REG(0x0C)   // disc offset >> 2
-#define DI_CMDBUF2  DI_REG(0x10)   // length in bytes
-#define DI_MAR      DI_REG(0x14)   // DMA memory address (physical)
-#define DI_LENGTH   DI_REG(0x18)   // DMA length
-#define DI_CR       DI_REG(0x1C)   // control: bit0 TSTART, bit1 DMA, bit2 RW(0=read)
-#define DI_IMMBUF   DI_REG(0x20)   // immediate data buffer (command result)
+// ---- DVD transport (physical disc) ----------------------------------------
+// The raw DI-register disc reader lives in its OWN translation unit
+// (IsoDvd_Dolphin.cpp). Keeping the volatile MMIO + inline asm (dcbi/sync, the DI
+// register pokes) OUT of this file matters: when that code shared this translation
+// unit, it perturbed the compiler's codegen enough to break GX rendering on an SD
+// boot -- even though the DVD path is never taken there. With it in a separate TU,
+// this file carries only plain SD/FST logic and compiles exactly like the proven
+// SD-only build, while the DVD reader is still linked in for real-disc boots.
+extern bool OctDvdRead(uint32_t offset, void* buf, uint32_t len);                   // any-alignment bounce read
+extern bool OctDvdReadAligned(uint32_t alignedOff, void* dst, uint32_t alignedLen); // 32-aligned fast path
+extern void OctDvdMount();                                                          // unlock + spin-up (no libogc)
 
-// Bounded wait on the DI transfer-start bit; false on timeout so a wedged drive can't
-// hang the machine.
-static bool DiWait()
-{
-    uint32_t g = 0;
-    while (DI_CR & 0x1) { if (++g > 0x20000000u) return false; }
-    return true;
-}
-
-// Read the drive's last error/status word (0 == OK). Immediate command 0xE0000000 ->
-// DIIMMBUF. Also serves to clear a latched error before a retry.
-static uint32_t DiGetError()
-{
-    DI_CMDBUF0 = 0xE0000000;
-    DI_IMMBUF  = 0;
-    DI_CR      = 0x1;            // TSTART, immediate (no DMA)
-    DiWait();
-    return DI_IMMBUF;
-}
-
-// One attempt at reading alignedLen (mult. of 32) bytes from 32-byte-aligned disc
-// `alignedOff` into the 32-byte-aligned buffer `dst`. Returns false on timeout/error.
-static bool DiReadOnce(uint32_t alignedOff, void* dst, uint32_t alignedLen)
-{
-    // Invalidate the destination cache range so the DMA'd data isn't shadowed by
-    // stale cache lines when the CPU reads it back.
-    uint8_t* p = (uint8_t*)dst;
-    for (uint32_t i = 0; i < alignedLen; i += 32)
-        __asm__ volatile ("dcbi 0,%0" :: "r"(p + i) : "memory");
-    __asm__ volatile ("sync" ::: "memory");
-
-    DI_SR      = DI_SR;                      // clear any pending interrupt bits
-    DI_CMDBUF0 = 0xA8000000;                 // DVD read (sector) command
-    DI_CMDBUF1 = alignedOff >> 2;            // disc offset in 4-byte units
-    DI_CMDBUF2 = alignedLen;                 // transfer length in bytes
-    DI_MAR     = (uint32_t)((uintptr_t)dst) & 0x1FFFFFFF;   // physical address
-    DI_LENGTH  = alignedLen;
-    DI_CR      = 0x3;                         // TSTART | DMA, RW=read
-
-    if (!DiWait()) return false;             // bounded poll -> timeout
-    if (DI_SR & 0x4) return false;           // DEINT (error-interrupt) latched
-    return true;
-}
-
-// Read with retries. Burned media often has marginal sectors that read on a second try,
-// so re-attempt a few times, clearing the drive error between attempts.
-static bool DiReadSectors(uint32_t alignedOff, void* dst, uint32_t alignedLen)
-{
-    if (((uintptr_t)dst & 31) || (alignedOff & 31) || (alignedLen & 31)) return false;
-
-    for (int attempt = 0; attempt < 5; ++attempt)
-    {
-        if (DiReadOnce(alignedOff, dst, alignedLen)) return true;
-        DiGetError();   // read/clear the latched error, then retry
-    }
-    return false;
-}
-
-// Hand-rolled drive bring-up: unlock the retail drive (debug backdoor), enable the
-// extended command set, spin the motor, and read the disc ID. This mirrors, in our own
-// MMIO, the register sequence Swiss issues in dvd.c (dvd_unlock / dvd_setextension /
-// dvd_motor_on_extra / dvd_setstatus / dvd_read_id) -- no libogc DVD driver linked.
-// Each step is bounded (DiWait) so a non-responsive drive fails fast instead of hanging.
-//
-// Deliberately NOT hand-rolled here: the hard drive reset (Swiss pokes the system reset
-// register 0xCC003024 via DVD_Reset(DVD_RESETHARD)) -- a wrong value there reboots the
-// whole console, and it's untestable without a disc; Swiss already hard-resets the drive
-// when it boots the disc, so this sequence re-asserts unlock/spin on top of that. The
-// per-drive firmware patches that enable burned-media reads are likewise left to Swiss
-// (applied at boot) -- they're drive-revision-specific blobs, too risky to port blind.
-static bool sDiMounted = false;
-static void DiMount()
-{
-    if (sDiMounted) return;
-    sDiMounted = true;
-
-    // Unlock sequence (MATSUSHITA / "DVD-GAME" magic) -- retail drive debug unlock.
-    DI_SR |= 0x14; DI_REG(0x04) = 0;
-    DI_CMDBUF0 = 0xFF014D41; DI_CMDBUF1 = 0x54534849; DI_CMDBUF2 = 0x54410200; DI_CR = 0x1; DiWait();
-    DI_SR |= 0x14; DI_REG(0x04) = 0;
-    DI_CMDBUF0 = 0xFF004456; DI_CMDBUF1 = 0x442D4741; DI_CMDBUF2 = 0x4D450300; DI_CR = 0x1; DiWait();
-
-    // Enable the extended command set.
-    DI_SR = 0x2E; DI_REG(0x04) = 0;
-    DI_CMDBUF0 = 0x55010000; DI_CMDBUF1 = 0; DI_CMDBUF2 = 0; DI_CR = 0x1; DiWait();
-
-    // Spin the motor (debug "start drive" + accept-copy: 0xFE110000 | 0x4100).
-    DI_SR = 0x2E; DI_REG(0x04) = 1;
-    DI_CMDBUF0 = 0xFE114100; DI_CMDBUF1 = 0; DI_CMDBUF2 = 0; DI_CR = 0x1; DiWait();
-
-    // Set status.
-    DI_SR = 0x2E; DI_REG(0x04) = 0;
-    DI_CMDBUF0 = 0xEE060300; DI_CMDBUF1 = 0; DI_CMDBUF2 = 0; DI_CR = 0x1; DiWait();
-
-    // Read the disc ID (confirms the disc / ensures it's spun). DMA 0x20 bytes into our
-    // own aligned buffer (NOT 0x80000000 like Swiss -- that would clobber low memory).
-    static uint8_t idbuf[32] __attribute__((aligned(32)));
-    for (uint32_t i = 0; i < 32; i += 32)
-        __asm__ volatile ("dcbi 0,%0" :: "r"(idbuf + i) : "memory");
-    __asm__ volatile ("sync" ::: "memory");
-    DI_SR = 0x2E; DI_REG(0x04) = 0;
-    DI_CMDBUF0 = 0xA8000040; DI_CMDBUF1 = 0; DI_CMDBUF2 = 0x20;
-    DI_MAR = (uint32_t)((uintptr_t)idbuf) & 0x1FFFFFFF; DI_LENGTH = 0x20;
-    DI_CR = 0x3; DiWait();
-}
-
-// Read `len` bytes at disc `offset` into `buf` via the active transport. The DI DMA
-// needs 32-byte-aligned offset/length/buffer, so misaligned reads bounce through an
-// aligned scratch buffer (used for the small boot.bin/FST reads; large asset reads
-// take the aligned fast path in SYS_AcquireFileData).
+// Read `len` bytes at disc `offset` into `buf` via the active transport: SD = plain
+// fseek/fread on the ISO file; DVD = our DI reader in the separate TU.
 static bool IsoReadRaw(uint32_t offset, void* buf, uint32_t len)
 {
     if (sIsoMode == ISO_SD)
@@ -305,15 +191,7 @@ static bool IsoReadRaw(uint32_t offset, void* buf, uint32_t len)
     }
     if (sIsoMode == ISO_DVD)
     {
-        uint32_t alignedOff = offset & ~31u;
-        uint32_t head       = offset - alignedOff;
-        uint32_t alignedLen = (head + len + 31u) & ~31u;
-        uint8_t* tmp = (uint8_t*)memalign(32, alignedLen);
-        if (tmp == nullptr) return false;
-        bool ok = DiReadSectors(alignedOff, tmp, alignedLen);
-        if (ok) memcpy(buf, tmp + head, len);
-        free(tmp);
-        return ok;
+        return OctDvdRead(offset, buf, len);
     }
     return false;
 }
@@ -414,7 +292,7 @@ static bool IsoOpenDVD()
     // Otherwise bring the drive up ourselves (unlock + spin + read-ID) and retry. This
     // covers a drive that idled/spun down; it pokes only the DI command registers, never
     // libogc and never the system reset register.
-    DiMount();
+    OctDvdMount();
     if (IsoParseFst()) { LogDebug("ISO mounted (DVD, after spin-up)"); return true; }
 
     sIsoMode = ISO_NONE;
@@ -600,7 +478,7 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
                 uint32_t alignedLen = ((uint32_t)fileSize + 31u) & ~31u;
                 outData = (char*)memalign(32, alignedLen);
                 outSize = uint32_t(fileSize);
-                if (outData != nullptr && DiReadSectors(ent.offset, outData, alignedLen))
+                if (outData != nullptr && OctDvdReadAligned(ent.offset, outData, alignedLen))
                     return;
                 if (outData != nullptr) { free(outData); outData = nullptr; outSize = 0; }
             }
