@@ -232,6 +232,16 @@ static bool IsoOpen(const char* isoPath)
 static void IsoLocate()
 {
     EngineState* es = GetEngineState();
+
+    // Preferred: the loader (Swiss/gekkoboot) passes the booted disc-image path as
+    // argv[0]. Robust regardless of the ISO's name or location on the card.
+    // (IsoOpen validates the GC disc magic, so a non-ISO argv[0] just falls through.)
+    if (es->mArgC > 0 && es->mArgV != nullptr && es->mArgV[0] != nullptr && es->mArgV[0][0] != '\0')
+    {
+        IsoLog("ISO argv0: %s", es->mArgV[0]);
+        if (IsoOpen(es->mArgV[0])) return;
+    }
+
     const std::string& pn = es->mProjectName;
     const std::string& pd = es->mProjectDirectory;
     if (pn.empty()) return;   // project name not set yet -- retry on a later call
