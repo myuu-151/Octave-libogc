@@ -274,6 +274,28 @@ void ReadCommandLineArgs(int32_t argc, char** argv)
     }
 }
 
+#if LUA_ENABLED && PLATFORM_DOLPHIN
+// On the GameCube/Wii there is no RTC hook for the C library time(), so it returns -1
+// and Lua's stock os.time() raises "time result cannot be represented", aborting any
+// script that calls it (e.g. math.randomseed(os.time()) in a component's Start()).
+// Replace the no-argument path with a safe, monotonic value from the engine clock --
+// this is read-only and never writes the RTC. A table argument (os.time{...}) is still
+// forwarded to the original os.time (mktime), which works fine on console.
+static int Octave_os_time(lua_State* L)
+{
+    if (lua_istable(L, 1))
+    {
+        lua_pushvalue(L, lua_upvalueindex(1)); // original os.time (captured at register time)
+        lua_insert(L, 1);
+        lua_call(L, lua_gettop(L) - 1, 1);
+        return 1;
+    }
+
+    lua_pushinteger(L, (lua_Integer)(SYS_GetTimeMicroseconds() / 1000000ULL));
+    return 1;
+}
+#endif
+
 bool Initialize()
 {
     InitializeLog();
@@ -432,6 +454,19 @@ bool Initialize()
 
         sEngineState.mLua = luaL_newstate();
         luaL_openlibs(sEngineState.mLua);
+
+#if PLATFORM_DOLPHIN
+        // Make os.time() safe on console (see Octave_os_time above) so scripts that seed
+        // random from os.time() don't abort on the GameCube/Wii.
+        lua_getglobal(sEngineState.mLua, "os");
+        if (lua_istable(sEngineState.mLua, -1))
+        {
+            lua_getfield(sEngineState.mLua, -1, "time");          // original os.time -> upvalue
+            lua_pushcclosure(sEngineState.mLua, Octave_os_time, 1);
+            lua_setfield(sEngineState.mLua, -2, "time");
+        }
+        lua_pop(sEngineState.mLua, 1);                            // pop the os table
+#endif
 
 #if OCT_LUA_DEBUGGING
         luaopen_socket_core(sEngineState.mLua);
