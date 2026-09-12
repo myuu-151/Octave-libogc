@@ -143,21 +143,14 @@ static uint32_t IsoRead32(const uint8_t* p)
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
-// Diagnostic log of ISO asset streaming, written to /octiso.log on the SD. Off by
-// default; set ISO_LOG_ENABLED to 1 to trace mount/hit/miss when debugging.
-#define ISO_LOG_ENABLED 0
-static void IsoLog(const char* fmt, ...)
-{
-#if ISO_LOG_ENABLED
-    FILE* lf = fopen("/octiso.log", "a");
-    if (lf == nullptr) return;
-    va_list ap; va_start(ap, fmt); vfprintf(lf, fmt, ap); va_end(ap);
-    fputc('\n', lf);
-    fclose(lf);
+// Diagnostic log of ISO asset streaming. The actual logger lives in a local,
+// git-ignored header (IsoLog_local.h) so it never ships. If that file is present
+// (a developer's machine), IsoLog writes /octiso.log; otherwise it's a no-op.
+#if __has_include("IsoLog_local.h")
+#include "IsoLog_local.h"
 #else
-    (void)fmt;
+static inline void IsoLog(const char*, ...) {}
 #endif
-}
 
 static bool IsoOpen(const char* isoPath)
 {

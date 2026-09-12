@@ -331,3 +331,7 @@ Engine/Assets/Scenes/Levels/SC_Demo_FirstPerson.oct
 **/Makefile_TEMP/**
 
 **Makefile_TEMP**
+
+# Local-only ISO streaming diagnostics (personal debug tool, do not commit)
+IsoLog_local.h
+octiso.log
