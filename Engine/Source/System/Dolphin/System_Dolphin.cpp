@@ -10,7 +10,12 @@
 #include "InputDevices.h"
 
 #include <gccore.h>
-#include <ogc/dvd.h>
+// NOTE: we deliberately do NOT #include <ogc/dvd.h>. Linking libogc's DVD driver
+// (dvd.o) into the game DOL makes it unbootable via the disc apploader on real
+// hardware -- the driver's startup/DI wiring faults under the IPL's bare boot
+// environment (Swiss's direct-DOL loader and Dolphin mask it). So the DVD transport
+// below reads the disc by poking the DI hardware registers directly (see DiRead),
+// which links nothing from libogc and keeps the DOL apploader-bootable.
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -160,11 +165,61 @@ static inline void IsoLog(const char*, ...) {}
 // ISO present => SD delivery; no SD ISO (booted from a real disc) => DVD delivery.
 enum { ISO_NONE = 0, ISO_SD, ISO_DVD };
 static int       sIsoMode = ISO_NONE;
-static dvdcmdblk sDvdBlk;
 
 static bool IsoMounted() { return sIsoMode != ISO_NONE; }
 
-// Read `len` bytes at disc `offset` into `buf` via the active transport. DVD_ReadPrio
+// ---- Minimal DVD reader (no libogc) ---------------------------------------
+// Read raw sectors straight off the physical disc by driving the DI (Drive
+// Interface) hardware registers at 0xCC006000. This links NOTHING from libogc's
+// DVD driver, so the DOL stays bootable via the disc apploader (see the note at
+// the top of the file). Requirements enforced by the DI DMA engine: disc offset
+// 4-byte aligned (we use 32), destination 32-byte aligned, length a multiple of
+// 32. After an apploader boot the drive is already spun up and the disc is
+// recognized (the IPL read the apploader + FST), so no reset/mount is needed.
+#define DI_REG(n)   (*(volatile uint32_t*)(0xCC006000 + (n)))
+#define DI_SR       DI_REG(0x00)   // status / interrupt
+#define DI_CMDBUF0  DI_REG(0x08)   // command
+#define DI_CMDBUF1  DI_REG(0x0C)   // disc offset >> 2
+#define DI_CMDBUF2  DI_REG(0x10)   // length in bytes
+#define DI_MAR      DI_REG(0x14)   // DMA memory address (physical)
+#define DI_LENGTH   DI_REG(0x18)   // DMA length
+#define DI_CR       DI_REG(0x1C)   // control: bit0 TSTART, bit1 DMA, bit2 RW(0=read)
+
+// Read alignedLen (mult. of 32) bytes from 32-byte-aligned disc `alignedOff` into
+// the 32-byte-aligned, physically-addressable buffer `dst`. Returns false on error.
+static bool DiReadSectors(uint32_t alignedOff, void* dst, uint32_t alignedLen)
+{
+    if (((uintptr_t)dst & 31) || (alignedOff & 31) || (alignedLen & 31)) return false;
+
+    // Invalidate the destination cache range so the DMA'd data isn't shadowed by
+    // stale cache lines when the CPU reads it back.
+    uint8_t* p = (uint8_t*)dst;
+    for (uint32_t i = 0; i < alignedLen; i += 32)
+        __asm__ volatile ("dcbi 0,%0" :: "r"(p + i) : "memory");
+    __asm__ volatile ("sync" ::: "memory");
+
+    DI_SR      = DI_SR;                      // clear any pending interrupt bits
+    DI_CMDBUF0 = 0xA8000000;                 // DVD read (sector) command
+    DI_CMDBUF1 = alignedOff >> 2;            // disc offset in 4-byte units
+    DI_CMDBUF2 = alignedLen;                 // transfer length in bytes
+    DI_MAR     = (uint32_t)((uintptr_t)dst) & 0x1FFFFFFF;   // physical address
+    DI_LENGTH  = alignedLen;
+    DI_CR      = 0x3;                         // TSTART | DMA, RW=read
+
+    // Poll until the transfer completes (TSTART clears). Bounded spin so a dead
+    // drive can't hang the machine forever.
+    uint32_t guard = 0;
+    while (DI_CR & 0x1)
+    {
+        if (++guard > 0x40000000u) return false;
+    }
+
+    // Error if the DI error-interrupt status (DEINT, bit1) latched.
+    if (DI_SR & 0x4) return false;
+    return true;
+}
+
+// Read `len` bytes at disc `offset` into `buf` via the active transport. The DI DMA
 // needs 32-byte-aligned offset/length/buffer, so misaligned reads bounce through an
 // aligned scratch buffer (used for the small boot.bin/FST reads; large asset reads
 // take the aligned fast path in SYS_AcquireFileData).
@@ -182,8 +237,7 @@ static bool IsoReadRaw(uint32_t offset, void* buf, uint32_t len)
         uint32_t alignedLen = (head + len + 31u) & ~31u;
         uint8_t* tmp = (uint8_t*)memalign(32, alignedLen);
         if (tmp == nullptr) return false;
-        s32 rc = DVD_ReadPrio(&sDvdBlk, tmp, (s32)alignedLen, (s64)alignedOff, 2);
-        bool ok = (rc >= 0);
+        bool ok = DiReadSectors(alignedOff, tmp, alignedLen);
         if (ok) memcpy(buf, tmp + head, len);
         free(tmp);
         return ok;
@@ -270,19 +324,16 @@ static bool IsoOpenSD(const char* isoPath)
     return false;
 }
 
-// DVD delivery: mount the physical disc and parse its FST. Only reached when no SD
-// ISO was found -- i.e. a real-disc boot (disc present), not an empty-drive SD run.
+// DVD delivery: read the physical disc's FST directly via the DI registers. Only
+// reached when no SD ISO was found -- i.e. a real-disc boot (disc present), not an
+// empty-drive SD run. No DVD_Init/DVD_Mount: after an apploader boot the drive is
+// already spun up and the disc recognized, and we link no libogc DVD driver (see the
+// note at the top of the file). If the first read fails (empty drive / bad disc),
+// we simply report not-mounted -- we never reset or poke a stopped drive.
 static bool IsoOpenDVD()
 {
     sIsoMode = ISO_DVD;
-    DVD_Init();
-
-    // First read may fail before the drive is spun up / disc-ID'd; DVD_Mount resets
-    // the drive and reads the disc header, then the read succeeds.
     if (IsoParseFst()) { LogDebug("ISO mounted (DVD)"); return true; }
-    DVD_Mount();
-    if (IsoParseFst()) { LogDebug("ISO mounted (DVD, after mount)"); return true; }
-
     sIsoMode = ISO_NONE;
     return false;
 }
@@ -293,13 +344,17 @@ static void IsoLocate()
 {
     EngineState* es = GetEngineState();
 
-    // 1) SD: the loader (Swiss/gekkoboot) passes the booted ISO path as argv[0];
-    //    otherwise try known SD locations. IsoOpenSD validates the GC disc magic.
+    // 1) SD: known locations. (The argv[0] hint is DISABLED for now -- under Swiss's
+    //    apploader/GCM boot argv is not reliably populated, and fopen()ing a stale/bogus
+    //    argv[0] before video init was a candidate for the hard hang on real hardware.
+    //    v1.3 booted reliably using only the candidate paths below, so match that.)
+#if 0
     if (es->mArgC > 0 && es->mArgV != nullptr && es->mArgV[0] != nullptr && es->mArgV[0][0] != '\0')
     {
         IsoLog("ISO argv0: %s", es->mArgV[0]);
         if (IsoOpenSD(es->mArgV[0])) return;
     }
+#endif
 
     const std::string& pn = es->mProjectName;
     const std::string& pd = es->mProjectDirectory;
@@ -317,11 +372,20 @@ static void IsoLocate()
         if (IsoOpenSD(c.c_str())) return;
     }
 
-    // 2) No SD image found -> assume physical-disc (DVD) delivery and read the disc.
-    //    NOTE: on an empty drive this attempts a disc read; that only happens if an
-    //    SD build's ISO is missing from the card (a misconfiguration) -- a proper DVD
-    //    build boots from a real disc, and a proper SD build finds its ISO above.
-    IsoLog("ISO: no SD image -- trying DVD transport");
+    // 2) No SD image found on THIS attempt. The DVD transport (DVD_Init/DVD_Mount)
+    //    must NOT be poked on an early miss: on an empty-drive SD rig those calls hang
+    //    real hardware (Dolphin tolerates them), and the SD ISO often isn't resolvable
+    //    on the very first asset access (project path / FAT not settled yet). v1.3
+    //    shipped SD-only and booted reliably by simply retrying SD. Preserve that:
+    //    only fall back to the physical disc as a true last resort, after SD has been
+    //    retried to exhaustion -- i.e. a genuine real-disc boot where no SD ISO will
+    //    ever appear. On an SD rig, SD mounts within the retries and we never get here.
+    if (sIsoAttempts < 16)
+    {
+        IsoLog("ISO: no SD image on attempt %d -- retry SD (not touching drive)", (int)sIsoAttempts);
+        return;
+    }
+    IsoLog("ISO: SD exhausted after %d attempts -- trying DVD transport", (int)sIsoAttempts);
     IsoOpenDVD();
 }
 
@@ -448,12 +512,12 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
 
             if (sIsoMode == ISO_DVD && (ent.offset & 31u) == 0)
             {
-                // Aligned fast path: DVD_ReadPrio straight into an aligned, length-
+                // Aligned fast path: DMA straight off the disc into an aligned, length-
                 // padded buffer (the packer 32-byte-aligns file data, so offsets align).
                 uint32_t alignedLen = ((uint32_t)fileSize + 31u) & ~31u;
                 outData = (char*)memalign(32, alignedLen);
                 outSize = uint32_t(fileSize);
-                if (outData != nullptr && DVD_ReadPrio(&sDvdBlk, outData, (s32)alignedLen, (s64)ent.offset, 2) >= 0)
+                if (outData != nullptr && DiReadSectors(ent.offset, outData, alignedLen))
                     return;
                 if (outData != nullptr) { free(outData); outData = nullptr; outSize = 0; }
             }
