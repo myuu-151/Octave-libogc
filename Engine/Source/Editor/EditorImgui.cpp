@@ -2310,7 +2310,7 @@ static void DrawPackageMenu()
 #endif
     if (ImGui::MenuItem("Android"))
         am->BuildData(Platform::Android, false);
-    if (ImGui::MenuItem("GameCube"))
+    if (ImGui::MenuItem("GameCube (SD/DVD)"))
         am->BuildData(Platform::GameCube, false);
     if (ImGui::MenuItem("Wii"))
         am->BuildData(Platform::Wii, false);

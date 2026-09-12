@@ -10,6 +10,7 @@
 #include "InputDevices.h"
 
 #include <gccore.h>
+#include <ogc/dvd.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -152,25 +153,60 @@ static uint32_t IsoRead32(const uint8_t* p)
 static inline void IsoLog(const char*, ...) {}
 #endif
 
-static bool IsoOpen(const char* isoPath)
-{
-    FILE* f = fopen(isoPath, "rb");
-    if (f == nullptr) return false;
+// ---- Transport ------------------------------------------------------------
+// The FST parser and everything above it are transport-agnostic; only IsoReadRaw
+// differs -- it reads raw bytes at a disc offset from either the SD-hosted ISO file
+// (fseek/fread) or the physical disc (DVD_ReadPrio). Delivery auto-selects: an SD
+// ISO present => SD delivery; no SD ISO (booted from a real disc) => DVD delivery.
+enum { ISO_NONE = 0, ISO_SD, ISO_DVD };
+static int       sIsoMode = ISO_NONE;
+static dvdcmdblk sDvdBlk;
 
+static bool IsoMounted() { return sIsoMode != ISO_NONE; }
+
+// Read `len` bytes at disc `offset` into `buf` via the active transport. DVD_ReadPrio
+// needs 32-byte-aligned offset/length/buffer, so misaligned reads bounce through an
+// aligned scratch buffer (used for the small boot.bin/FST reads; large asset reads
+// take the aligned fast path in SYS_AcquireFileData).
+static bool IsoReadRaw(uint32_t offset, void* buf, uint32_t len)
+{
+    if (sIsoMode == ISO_SD)
+    {
+        if (fseek(sIso, (long)offset, SEEK_SET) != 0) return false;
+        return fread(buf, 1, len, sIso) == len;
+    }
+    if (sIsoMode == ISO_DVD)
+    {
+        uint32_t alignedOff = offset & ~31u;
+        uint32_t head       = offset - alignedOff;
+        uint32_t alignedLen = (head + len + 31u) & ~31u;
+        uint8_t* tmp = (uint8_t*)memalign(32, alignedLen);
+        if (tmp == nullptr) return false;
+        s32 rc = DVD_ReadPrio(&sDvdBlk, tmp, (s32)alignedLen, (s64)alignedOff, 2);
+        bool ok = (rc >= 0);
+        if (ok) memcpy(buf, tmp + head, len);
+        free(tmp);
+        return ok;
+    }
+    return false;
+}
+
+// Read boot.bin -> FST -> path->{offset,size} map using the active transport.
+static bool IsoParseFst()
+{
     uint8_t hdr[0x440];
-    if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr)) { fclose(f); return false; }
-    if (IsoRead32(hdr + 0x1C) != 0xC2339F3D) { fclose(f); return false; }  // GC disc magic
+    if (!IsoReadRaw(0, hdr, sizeof(hdr))) return false;
+    if (IsoRead32(hdr + 0x1C) != 0xC2339F3D) return false;  // GC disc magic
 
     uint32_t fstOff  = IsoRead32(hdr + 0x424);
     uint32_t fstSize = IsoRead32(hdr + 0x428);
-    if (fstOff == 0 || fstSize < 12) { fclose(f); return false; }
+    if (fstOff == 0 || fstSize < 12) return false;
 
     std::vector<uint8_t> fst(fstSize);
-    fseek(f, fstOff, SEEK_SET);
-    if (fread(fst.data(), 1, fstSize, f) != fstSize) { fclose(f); return false; }
+    if (!IsoReadRaw(fstOff, fst.data(), fstSize)) return false;
 
     uint32_t numEntries = IsoRead32(&fst[8]);            // root entry length = entry count
-    if ((uint64_t)numEntries * 12 > fstSize || numEntries == 0) { fclose(f); return false; }
+    if ((uint64_t)numEntries * 12 > fstSize || numEntries == 0) return false;
     const char* strTable = (const char*)&fst[numEntries * 12];
     uint32_t strMax = fstSize - numEntries * 12;
 
@@ -212,32 +248,62 @@ static bool IsoOpen(const char* isoPath)
         }
     }
 
-    sIso = f;
-    LogDebug("ISO mounted: %s (%u files in FST)", isoPath, (uint32_t)sIsoFiles.size());
-    IsoLog("ISO MOUNTED: %s  files=%u", isoPath, (uint32_t)sIsoFiles.size());
+    IsoLog("ISO MOUNTED (%s)  files=%u", sIsoMode == ISO_DVD ? "DVD" : "SD", (uint32_t)sIsoFiles.size());
     int32_t sample = 0;
     for (auto& kv : sIsoFiles) { IsoLog("  fst: %s (%u bytes)", kv.first.c_str(), kv.second.size); if (++sample >= 8) break; }
     return true;
 }
 
-// Try known locations for the project's disc image. The ISO is whatever Swiss
-// booted; we look for <ProjectName>.iso near the project dir / SD root.
+// SD delivery: open the ISO file on the card and parse its FST.
+static bool IsoOpenSD(const char* isoPath)
+{
+    FILE* f = fopen(isoPath, "rb");
+    if (f == nullptr) return false;
+    sIso = f;
+    sIsoMode = ISO_SD;
+    if (IsoParseFst())
+    {
+        LogDebug("ISO mounted (SD): %s (%u files)", isoPath, (uint32_t)sIsoFiles.size());
+        return true;
+    }
+    fclose(f); sIso = nullptr; sIsoMode = ISO_NONE;
+    return false;
+}
+
+// DVD delivery: mount the physical disc and parse its FST. Only reached when no SD
+// ISO was found -- i.e. a real-disc boot (disc present), not an empty-drive SD run.
+static bool IsoOpenDVD()
+{
+    sIsoMode = ISO_DVD;
+    DVD_Init();
+
+    // First read may fail before the drive is spun up / disc-ID'd; DVD_Mount resets
+    // the drive and reads the disc header, then the read succeeds.
+    if (IsoParseFst()) { LogDebug("ISO mounted (DVD)"); return true; }
+    DVD_Mount();
+    if (IsoParseFst()) { LogDebug("ISO mounted (DVD, after mount)"); return true; }
+
+    sIsoMode = ISO_NONE;
+    return false;
+}
+
+// Locate the disc image: SD first (an ISO on the card => SD delivery), else the
+// physical disc (=> DVD delivery). The presence of an SD ISO IS the delivery signal.
 static void IsoLocate()
 {
     EngineState* es = GetEngineState();
 
-    // Preferred: the loader (Swiss/gekkoboot) passes the booted disc-image path as
-    // argv[0]. Robust regardless of the ISO's name or location on the card.
-    // (IsoOpen validates the GC disc magic, so a non-ISO argv[0] just falls through.)
+    // 1) SD: the loader (Swiss/gekkoboot) passes the booted ISO path as argv[0];
+    //    otherwise try known SD locations. IsoOpenSD validates the GC disc magic.
     if (es->mArgC > 0 && es->mArgV != nullptr && es->mArgV[0] != nullptr && es->mArgV[0][0] != '\0')
     {
         IsoLog("ISO argv0: %s", es->mArgV[0]);
-        if (IsoOpen(es->mArgV[0])) return;
+        if (IsoOpenSD(es->mArgV[0])) return;
     }
 
     const std::string& pn = es->mProjectName;
     const std::string& pd = es->mProjectDirectory;
-    if (pn.empty()) return;   // project name not set yet -- retry on a later call
+    if (pn.empty()) return;   // too early (project name not set) -- retry on a later call
 
     std::string cands[] = {
         pd + pn + ".iso",
@@ -248,9 +314,15 @@ static void IsoLocate()
     for (const std::string& c : cands)
     {
         IsoLog("ISO try: %s", c.c_str());
-        if (IsoOpen(c.c_str())) return;
+        if (IsoOpenSD(c.c_str())) return;
     }
-    IsoLog("ISO: none of the candidate paths opened (project '%s', dir '%s')", pn.c_str(), pd.c_str());
+
+    // 2) No SD image found -> assume physical-disc (DVD) delivery and read the disc.
+    //    NOTE: on an empty drive this attempts a disc read; that only happens if an
+    //    SD build's ISO is missing from the card (a misconfiguration) -- a proper DVD
+    //    build boots from a real disc, and a proper SD build finds its ISO above.
+    IsoLog("ISO: no SD image -- trying DVD transport");
+    IsoOpenDVD();
 }
 
 // Longest-suffix match: the FST stores paths relative to the packaged root, while
@@ -279,8 +351,8 @@ static bool IsoFind(const char* path, IsoEntry& out)
 // Does the mounted ISO contain this asset? (Locates the ISO lazily.)
 static bool IsoHasFile(const char* path)
 {
-    if (sIso == nullptr && sIsoAttempts < 16) { sIsoAttempts++; IsoLocate(); }
-    if (sIso == nullptr) return false;
+    if (!IsoMounted() && sIsoAttempts < 16) { sIsoAttempts++; IsoLocate(); }
+    if (!IsoMounted()) return false;
     IsoEntry ent;
     return IsoFind(path, ent);
 }
@@ -354,17 +426,17 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
     outData = nullptr;
     outSize = 0;
 
-    // On-disc streaming: serve assets from the ISO's FST if one is present.
+    // On-disc streaming: serve assets from the ISO's FST if one is mounted (SD or DVD).
     if (isAsset)
     {
-        if (sIso == nullptr && sIsoAttempts < 16)
+        if (!IsoMounted() && sIsoAttempts < 16)
         {
             sIsoAttempts++;
             IsoLocate();
         }
 
         IsoEntry ent;
-        if (sIso != nullptr && IsoFind(path, ent))
+        if (IsoMounted() && IsoFind(path, ent))
         {
             int32_t fileSize = (int32_t)ent.size;
             if (maxSize > 0)
@@ -374,11 +446,26 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
 
             IsoLog("H %s", path);
 
-            outData = (char*)malloc(fileSize);
-            outSize = uint32_t(fileSize);
-            fseek(sIso, ent.offset, SEEK_SET);
-            fread(outData, fileSize, 1, sIso);
-            return;
+            if (sIsoMode == ISO_DVD && (ent.offset & 31u) == 0)
+            {
+                // Aligned fast path: DVD_ReadPrio straight into an aligned, length-
+                // padded buffer (the packer 32-byte-aligns file data, so offsets align).
+                uint32_t alignedLen = ((uint32_t)fileSize + 31u) & ~31u;
+                outData = (char*)memalign(32, alignedLen);
+                outSize = uint32_t(fileSize);
+                if (outData != nullptr && DVD_ReadPrio(&sDvdBlk, outData, (s32)alignedLen, (s64)ent.offset, 2) >= 0)
+                    return;
+                if (outData != nullptr) { free(outData); outData = nullptr; outSize = 0; }
+            }
+            else
+            {
+                // SD (fseek/fread) or DVD with a misaligned offset (bounce via IsoReadRaw).
+                outData = (char*)malloc(fileSize);
+                outSize = uint32_t(fileSize);
+                if (outData != nullptr && IsoReadRaw(ent.offset, outData, (uint32_t)fileSize))
+                    return;
+                if (outData != nullptr) { free(outData); outData = nullptr; outSize = 0; }
+            }
         }
     }
 
@@ -475,10 +562,10 @@ void SYS_OpenDirectory(const std::string& dirPath, DirEntry& outDirEntry)
     outDirEntry.mIsoEnum = nullptr;
 
     // Locate the ISO lazily -- a directory scan may be the first thing requested.
-    if (sIso == nullptr && sIsoAttempts < 16) { sIsoAttempts++; IsoLocate(); }
+    if (!IsoMounted() && sIsoAttempts < 16) { sIsoAttempts++; IsoLocate(); }
 
     // Prefer the ISO's FST for directories that live inside the mounted disc image.
-    if (sIso != nullptr)
+    if (IsoMounted())
     {
         IsoDirEnum* en = new IsoDirEnum();
         en->index = 0;
