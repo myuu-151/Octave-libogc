@@ -99,8 +99,18 @@ void SYS_Update()
 }
 
 // Files
+static bool IsoHasFile(const char* path);   // defined with the ISO reader below
+
 bool SYS_DoesFileExist(const char* path, bool isAsset)
 {
+    // A bundled asset lives in the ISO's FST, not the SD's FAT -- so stat() alone
+    // would report it missing and callers (e.g. ScriptUtils::RunScript) would bail
+    // before ever reading it. Check the ISO first.
+    if (isAsset && IsoHasFile(path))
+    {
+        return true;
+    }
+
     struct stat info;
     bool exists = false;
 
@@ -133,15 +143,20 @@ static uint32_t IsoRead32(const uint8_t* p)
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
-// Diagnostic log to the SD (reliable -- this path is plain file I/O). Written to
-// the FAT default device root so it survives even if asset loading fails.
+// Diagnostic log of ISO asset streaming, written to /octiso.log on the SD. Off by
+// default; set ISO_LOG_ENABLED to 1 to trace mount/hit/miss when debugging.
+#define ISO_LOG_ENABLED 0
 static void IsoLog(const char* fmt, ...)
 {
+#if ISO_LOG_ENABLED
     FILE* lf = fopen("/octiso.log", "a");
     if (lf == nullptr) return;
     va_list ap; va_start(ap, fmt); vfprintf(lf, fmt, ap); va_end(ap);
     fputc('\n', lf);
     fclose(lf);
+#else
+    (void)fmt;
+#endif
 }
 
 static bool IsoOpen(const char* isoPath)
@@ -253,13 +268,79 @@ static bool IsoFind(const char* path, IsoEntry& out)
         if (it != sIsoFiles.end()) { out = it->second; return true; }
         size_t nx = p.find('/', pos);
         if (nx == std::string::npos)
-        {
-            static bool loggedMiss = false;
-            if (!loggedMiss) { loggedMiss = true; IsoLog("ISO MISS (first): request '%s'", path); }
             return false;
-        }
         pos = nx + 1;
     }
+}
+
+// Does the mounted ISO contain this asset? (Locates the ISO lazily.)
+static bool IsoHasFile(const char* path)
+{
+    if (sIso == nullptr && sIsoAttempts < 16) { sIsoAttempts++; IsoLocate(); }
+    if (sIso == nullptr) return false;
+    IsoEntry ent;
+    return IsoFind(path, ent);
+}
+
+// Directory enumeration over the ISO FST, so directory-scanning code (e.g. the
+// Lua script discovery in ScriptUtils::LoadScriptDirectory) sees files bundled in
+// the disc image, not just loose files on the SD. Lists the immediate children of
+// whichever FST directory the request path resolves to (longest-suffix match).
+struct IsoDirEnum { std::vector<std::pair<std::string, bool>> entries; size_t index; };
+
+static bool IsoListDir(const char* dirPath, std::vector<std::pair<std::string, bool>>& out)
+{
+    if (sIsoFiles.empty()) return false;
+
+    // lowercase + '/' + drop "." components + ensure trailing '/'
+    std::string raw;
+    for (const char* c = dirPath; *c != '\0'; ++c)
+        raw += (*c == '\\') ? '/' : (char)tolower((unsigned char)*c);
+    raw += '/';
+    std::string p, comp;
+    for (char c : raw)
+    {
+        if (c == '/') { if (!comp.empty() && comp != ".") { p += comp; p += '/'; } comp.clear(); }
+        else comp += c;
+    }
+
+    // Longest suffix of p that is a prefix of some FST key = the matching ISO dir.
+    std::string prefix;
+    for (size_t pos = 0; pos <= p.size(); )
+    {
+        std::string cand = p.substr(pos);
+        if (!cand.empty())
+        {
+            for (auto& kv : sIsoFiles)
+                if (kv.first.size() > cand.size() && kv.first.compare(0, cand.size(), cand) == 0)
+                { prefix = cand; break; }
+        }
+        if (!prefix.empty()) break;
+        size_t nx = p.find('/', pos);
+        if (nx == std::string::npos) break;
+        pos = nx + 1;
+    }
+    if (prefix.empty()) return false;
+
+    // Immediate children under the prefix (files + subdirs, de-duplicated).
+    std::unordered_map<std::string, bool> seen;
+    for (auto& kv : sIsoFiles)
+    {
+        const std::string& key = kv.first;
+        if (key.size() <= prefix.size() || key.compare(0, prefix.size(), prefix) != 0) continue;
+        std::string rest = key.substr(prefix.size());
+        size_t slash = rest.find('/');
+        if (slash == std::string::npos)
+        {
+            if (seen.emplace(rest, false).second) out.push_back({ rest, false });
+        }
+        else
+        {
+            std::string sub = rest.substr(0, slash);
+            if (seen.emplace(sub + "/", true).second) out.push_back({ sub, true });
+        }
+    }
+    return !out.empty();
 }
 
 void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*& outData, uint32_t& outSize)
@@ -288,8 +369,7 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
                 fileSize = glm::min(fileSize, maxSize);
             }
 
-            static bool loggedHit = false;
-            if (!loggedHit) { loggedHit = true; IsoLog("ISO HIT (first): '%s' -> off=0x%X size=%u", path, ent.offset, ent.size); }
+            IsoLog("H %s", path);
 
             outData = (char*)malloc(fileSize);
             outSize = uint32_t(fileSize);
@@ -304,6 +384,8 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
 
     if (file != nullptr)
     {
+        if (isAsset) IsoLog("L %s", path);
+
         int32_t fileSize = 0;
         fseek(file, 0, SEEK_END);
         fileSize = ftell(file);
@@ -323,6 +405,7 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
     }
     else
     {
+        if (isAsset) IsoLog("F %s", path);
         LogError("Failed to open file: %s", path);
     }
 }
@@ -386,6 +469,28 @@ bool SYS_Rename(const char* oldPath, const char* newPath)
 void SYS_OpenDirectory(const std::string& dirPath, DirEntry& outDirEntry)
 {
     strncpy(outDirEntry.mDirectoryPath, dirPath.c_str(), MAX_PATH_SIZE);
+    outDirEntry.mIsoEnum = nullptr;
+
+    // Locate the ISO lazily -- a directory scan may be the first thing requested.
+    if (sIso == nullptr && sIsoAttempts < 16) { sIsoAttempts++; IsoLocate(); }
+
+    // Prefer the ISO's FST for directories that live inside the mounted disc image.
+    if (sIso != nullptr)
+    {
+        IsoDirEnum* en = new IsoDirEnum();
+        en->index = 0;
+        if (IsoListDir(dirPath.c_str(), en->entries))
+        {
+            IsoLog("ISO dir: %s -> %u entries", dirPath.c_str(), (uint32_t)en->entries.size());
+            outDirEntry.mIsoEnum = en;
+            outDirEntry.mDir = nullptr;
+            strncpy(outDirEntry.mFilename, en->entries[0].first.c_str(), MAX_PATH_SIZE);
+            outDirEntry.mDirectory = en->entries[0].second;
+            outDirEntry.mValid = true;
+            return;
+        }
+        delete en;
+    }
 
     outDirEntry.mDir = opendir(dirPath.c_str());
     if (outDirEntry.mDir == nullptr)
@@ -415,6 +520,23 @@ void SYS_OpenDirectory(const std::string& dirPath, DirEntry& outDirEntry)
 
 void SYS_IterateDirectory(DirEntry& dirEntry)
 {
+    if (dirEntry.mIsoEnum != nullptr)
+    {
+        IsoDirEnum* en = (IsoDirEnum*)dirEntry.mIsoEnum;
+        en->index++;
+        if (en->index >= en->entries.size())
+        {
+            dirEntry.mValid = false;
+        }
+        else
+        {
+            strncpy(dirEntry.mFilename, en->entries[en->index].first.c_str(), MAX_PATH_SIZE);
+            dirEntry.mDirectory = en->entries[en->index].second;
+            dirEntry.mValid = true;
+        }
+        return;
+    }
+
     dirent* ent = readdir(dirEntry.mDir);
     if (ent == nullptr)
     {
@@ -435,6 +557,13 @@ void SYS_IterateDirectory(DirEntry& dirEntry)
 
 void SYS_CloseDirectory(DirEntry& dirEntry)
 {
+    if (dirEntry.mIsoEnum != nullptr)
+    {
+        delete (IsoDirEnum*)dirEntry.mIsoEnum;
+        dirEntry.mIsoEnum = nullptr;
+        return;
+    }
+
     closedir(dirEntry.mDir);
     dirEntry.mDir = nullptr;
 }

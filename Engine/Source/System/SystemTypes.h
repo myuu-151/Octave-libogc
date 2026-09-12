@@ -85,6 +85,7 @@ struct DirEntry
     DIR* mDir = nullptr;
 #elif PLATFORM_DOLPHIN
     DIR* mDir = nullptr;
+    void* mIsoEnum = nullptr;   // ISO FST directory enumeration state (nullptr = FAT)
 #elif PLATFORM_3DS
     DIR* mDir = nullptr;
 #endif

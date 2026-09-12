@@ -2,6 +2,9 @@
 
 #if LUA_ENABLED
 
+#include "Stream.h"
+#include <string>
+
 #include "LuaBindings/Vector_Lua.h"
 #include "LuaBindings/Rect_Lua.h"
 #include "LuaBindings/Engine_Lua.h"
@@ -151,6 +154,59 @@ void UpdateLuaPath()
     }
 }
 
+// Custom require() searcher: load modules through the engine's asset system
+// (Stream::ReadFile -> SYS_AcquireFileData), so require() finds scripts inside a
+// bundled ISO -- not just via Lua's built-in fopen loader, which only sees loose
+// files on the SD. Registered as a fallback after the default searchers, so it
+// only kicks in when the stock loader can't find the module (e.g. on-disc builds).
+static int OctaveLuaSearcher(lua_State* L)
+{
+    const char* modname = luaL_checkstring(L, 1);
+
+    // "a.b.c" -> "a/b/c"
+    std::string rel;
+    for (const char* c = modname; *c != '\0'; ++c)
+        rel += (*c == '.') ? '/' : *c;
+
+    std::string cands[] = {
+        GetEngineState()->mProjectDirectory + "Scripts/" + rel + ".lua",
+        std::string("Engine/Scripts/") + rel + ".lua",
+    };
+
+    std::string tried;
+    for (const std::string& path : cands)
+    {
+        Stream stream;
+        stream.ReadFile(path.c_str(), true);   // isAsset=true -> SYS_AcquireFileData -> ISO or loose
+        if (stream.GetData() != nullptr && stream.GetSize() > 0)
+        {
+            if (luaL_loadbuffer(L, stream.GetData(), stream.GetSize(), path.c_str()) != 0)
+                return lua_error(L);            // compile error -> propagate
+            return 1;                           // return the loaded chunk (the module loader)
+        }
+        tried += "\n\tno asset '" + path + "'";
+    }
+
+    lua_pushstring(L, tried.c_str());           // not found -> message, require tries next searcher
+    return 1;
+}
+
+static void RegisterAssetSearcher()
+{
+    lua_State* L = GetLua();
+    if (L == nullptr) return;
+
+    lua_getglobal(L, "package");        // package
+    lua_getfield(L, -1, "searchers");   // package, searchers
+    if (lua_istable(L, -1))
+    {
+        int n = (int)lua_rawlen(L, -1);
+        lua_pushcfunction(L, OctaveLuaSearcher);
+        lua_rawseti(L, -2, n + 1);      // append as a fallback searcher
+    }
+    lua_pop(L, 2);                      // searchers, package
+}
+
 void SetupLuaPath()
 {
     // Grab and save the initial path so we can update it if the project changes.
@@ -166,6 +222,9 @@ void SetupLuaPath()
 
     // Then update the package.path variable to include our script folders.
     UpdateLuaPath();
+
+    // Add our asset-system searcher so require() works from a bundled ISO.
+    RegisterAssetSearcher();
 }
 
 #endif
