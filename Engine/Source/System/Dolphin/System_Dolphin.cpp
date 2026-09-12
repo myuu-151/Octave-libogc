@@ -16,6 +16,12 @@
 #include <malloc.h>
 #include <fat.h>
 
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <ctype.h>
+#include <stdarg.h>
+
 #define ENABLE_LIBOGC_CONSOLE 0
 
 static bool sFatInit = false;
@@ -109,6 +115,153 @@ bool SYS_DoesFileExist(const char* path, bool isAsset)
     return exists;
 }
 
+// ---------------------------------------------------------------------------
+// Version B on-disc streaming: read assets straight out of a single .iso file on
+// the SD via fopen/fseek, parsing the GameCube disc FST in-engine. This sidesteps
+// Swiss's disc emulation entirely (which libogc's low-memory clobber breaks) --
+// it's ordinary SD file I/O, so it streams on demand (not RAM-limited), needs no
+// USB Gecko, and is fully debuggable. Falls back to loose-file reads if no ISO is
+// found, so existing SD-folder builds keep working.
+// ---------------------------------------------------------------------------
+struct IsoEntry { uint32_t offset; uint32_t size; };
+static FILE* sIso = nullptr;
+static int32_t sIsoAttempts = 0;
+static std::unordered_map<std::string, IsoEntry> sIsoFiles;  // key: relpath, lowercase, '/'
+
+static uint32_t IsoRead32(const uint8_t* p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+// Diagnostic log to the SD (reliable -- this path is plain file I/O). Written to
+// the FAT default device root so it survives even if asset loading fails.
+static void IsoLog(const char* fmt, ...)
+{
+    FILE* lf = fopen("/octiso.log", "a");
+    if (lf == nullptr) return;
+    va_list ap; va_start(ap, fmt); vfprintf(lf, fmt, ap); va_end(ap);
+    fputc('\n', lf);
+    fclose(lf);
+}
+
+static bool IsoOpen(const char* isoPath)
+{
+    FILE* f = fopen(isoPath, "rb");
+    if (f == nullptr) return false;
+
+    uint8_t hdr[0x440];
+    if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr)) { fclose(f); return false; }
+    if (IsoRead32(hdr + 0x1C) != 0xC2339F3D) { fclose(f); return false; }  // GC disc magic
+
+    uint32_t fstOff  = IsoRead32(hdr + 0x424);
+    uint32_t fstSize = IsoRead32(hdr + 0x428);
+    if (fstOff == 0 || fstSize < 12) { fclose(f); return false; }
+
+    std::vector<uint8_t> fst(fstSize);
+    fseek(f, fstOff, SEEK_SET);
+    if (fread(fst.data(), 1, fstSize, f) != fstSize) { fclose(f); return false; }
+
+    uint32_t numEntries = IsoRead32(&fst[8]);            // root entry length = entry count
+    if ((uint64_t)numEntries * 12 > fstSize || numEntries == 0) { fclose(f); return false; }
+    const char* strTable = (const char*)&fst[numEntries * 12];
+    uint32_t strMax = fstSize - numEntries * 12;
+
+    // Walk the FST, reconstructing full relative paths. Directory entries carry a
+    // "next index" (one past their subtree); file entries carry disc offset + size.
+    struct Frame { uint32_t end; size_t restoreLen; };
+    std::vector<Frame> stack;
+    std::string cur;                          // current dir prefix, lowercase, trailing '/'
+    stack.push_back({ numEntries, 0 });       // root subtree
+
+    sIsoFiles.clear();
+    for (uint32_t i = 1; i < numEntries; ++i)
+    {
+        while (stack.size() > 1 && i >= stack.back().end)
+        {
+            cur.resize(stack.back().restoreLen);
+            stack.pop_back();
+        }
+
+        const uint8_t* e = &fst[i * 12];
+        uint8_t type = e[0];
+        uint32_t nameOff = ((uint32_t)e[1] << 16) | ((uint32_t)e[2] << 8) | (uint32_t)e[3];
+
+        std::string name;
+        for (uint32_t k = nameOff; k < strMax && strTable[k] != '\0'; ++k)
+            name += (char)tolower((unsigned char)strTable[k]);
+
+        if (type == 1)   // directory
+        {
+            uint32_t next = IsoRead32(e + 8);
+            stack.push_back({ next, cur.size() });
+            cur += name;
+            cur += '/';
+        }
+        else             // file
+        {
+            IsoEntry ent = { IsoRead32(e + 4), IsoRead32(e + 8) };
+            sIsoFiles[cur + name] = ent;
+        }
+    }
+
+    sIso = f;
+    LogDebug("ISO mounted: %s (%u files in FST)", isoPath, (uint32_t)sIsoFiles.size());
+    IsoLog("ISO MOUNTED: %s  files=%u", isoPath, (uint32_t)sIsoFiles.size());
+    int32_t sample = 0;
+    for (auto& kv : sIsoFiles) { IsoLog("  fst: %s (%u bytes)", kv.first.c_str(), kv.second.size); if (++sample >= 8) break; }
+    return true;
+}
+
+// Try known locations for the project's disc image. The ISO is whatever Swiss
+// booted; we look for <ProjectName>.iso near the project dir / SD root.
+static void IsoLocate()
+{
+    EngineState* es = GetEngineState();
+    const std::string& pn = es->mProjectName;
+    const std::string& pd = es->mProjectDirectory;
+    if (pn.empty()) return;   // project name not set yet -- retry on a later call
+
+    std::string cands[] = {
+        pd + pn + ".iso",
+        pd + "../" + pn + ".iso",
+        "/" + pn + ".iso",
+        pn + ".iso",
+    };
+    for (const std::string& c : cands)
+    {
+        IsoLog("ISO try: %s", c.c_str());
+        if (IsoOpen(c.c_str())) return;
+    }
+    IsoLog("ISO: none of the candidate paths opened (project '%s', dir '%s')", pn.c_str(), pd.c_str());
+}
+
+// Longest-suffix match: the FST stores paths relative to the packaged root, while
+// the request path may carry an SD/project prefix. Find the FST entry whose
+// relative path is the longest '/'-aligned tail of the request.
+static bool IsoFind(const char* path, IsoEntry& out)
+{
+    if (sIsoFiles.empty()) return false;
+
+    std::string p;
+    for (const char* c = path; *c != '\0'; ++c)
+        p += (*c == '\\') ? '/' : (char)tolower((unsigned char)*c);
+
+    size_t pos = 0;
+    for (;;)
+    {
+        auto it = sIsoFiles.find(p.substr(pos));
+        if (it != sIsoFiles.end()) { out = it->second; return true; }
+        size_t nx = p.find('/', pos);
+        if (nx == std::string::npos)
+        {
+            static bool loggedMiss = false;
+            if (!loggedMiss) { loggedMiss = true; IsoLog("ISO MISS (first): request '%s'", path); }
+            return false;
+        }
+        pos = nx + 1;
+    }
+}
+
 void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*& outData, uint32_t& outSize)
 {
     // Need to init fat in case opening the Engine.ini in OctPreInitialize()
@@ -117,9 +270,37 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
     outData = nullptr;
     outSize = 0;
 
-    FILE* file = fopen(path, "rb");
+    // On-disc streaming: serve assets from the ISO's FST if one is present.
+    if (isAsset)
+    {
+        if (sIso == nullptr && sIsoAttempts < 16)
+        {
+            sIsoAttempts++;
+            IsoLocate();
+        }
 
-    // TODO: Handle reading from ISO
+        IsoEntry ent;
+        if (sIso != nullptr && IsoFind(path, ent))
+        {
+            int32_t fileSize = (int32_t)ent.size;
+            if (maxSize > 0)
+            {
+                fileSize = glm::min(fileSize, maxSize);
+            }
+
+            static bool loggedHit = false;
+            if (!loggedHit) { loggedHit = true; IsoLog("ISO HIT (first): '%s' -> off=0x%X size=%u", path, ent.offset, ent.size); }
+
+            outData = (char*)malloc(fileSize);
+            outSize = uint32_t(fileSize);
+            fseek(sIso, ent.offset, SEEK_SET);
+            fread(outData, fileSize, 1, sIso);
+            return;
+        }
+    }
+
+    // Fall back to a loose file on the SD.
+    FILE* file = fopen(path, "rb");
 
     if (file != nullptr)
     {
