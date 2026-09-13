@@ -256,7 +256,18 @@ void VideoPlayer::SetAudioEnabled(bool enabled)
 
 void VideoPlayer::SetUseYuv(bool useYuv)
 {
+    if (mUseYuv == useYuv)
+    {
+        return;
+    }
+
     mUseYuv = useYuv;
+
+    if (mStream != nullptr)
+    {
+        // Reopen with the new frame format on the next Update() (playback state is kept).
+        Close();
+    }
 }
 
 bool VideoPlayer::Open(VideoClip* clip)

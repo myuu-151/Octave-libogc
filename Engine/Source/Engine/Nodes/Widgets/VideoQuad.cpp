@@ -5,6 +5,8 @@
 #include "Renderer.h"
 #include "Log.h"
 
+#include "Graphics/Graphics.h"
+
 #if EDITOR
 #include "EditorState.h"
 #include "Viewport2d.h"
@@ -40,10 +42,6 @@ bool VideoQuad::HandleVideoPropChange(Datum* datum, uint32_t index, const void* 
 VideoQuad::VideoQuad()
 {
     SetName("Video");
-
-    // Widgets draw with their own TEV setup, so on GameCube/Wii frames can stay YUV
-    // and be converted to RGB on the GPU.
-    mPlayer.SetUseYuv(true);
 }
 
 VideoQuad::~VideoQuad()
@@ -108,23 +106,31 @@ void VideoQuad::GatherProperties(std::vector<Property>& outProps)
     outProps.push_back(Property(DatumType::Bool, "Audio Enabled", this, &mAudioEnabled));
     outProps.push_back(Property(DatumType::Float, "Volume", this, &mVolume));
     outProps.push_back(Property(DatumType::Bool, "Fill Screen", this, &mFillScreen));
+    outProps.push_back(Property(DatumType::Bool, "GPU Color Conversion", this, &mGpuColorConversion));
 }
 
 void VideoQuad::PreRender()
 {
-    if (mFillScreen)
+    if (!mFillScreen)
     {
-        FitToScreen();
+        Quad::PreRender();
+        return;
     }
 
-    Quad::PreRender();
+    // Lay out as usual, then draw over the whole screen instead. Only the computed
+    // rect is replaced; the saved layout (anchor, offset, size) is never touched, so
+    // turning Fill Screen off restores the widget's own placement.
+    MarkDirty();
+    Widget::PreRender();
+    mRect = GetScreenRect();
+    UpdateVertexData();
+    GFX_UpdateQuadResourceVertexData(this);
 }
 
-void VideoQuad::FitToScreen()
+Rect VideoQuad::GetScreenRect()
 {
     // The area a top-level widget lays out in: the viewport, or in the 2D editor the
     // wrapper widget that frames the game screen (mirrors Widget::UpdateRect).
-    Widget* parent = GetParentWidget();
     glm::uvec4 vp = Renderer::Get()->GetViewport();
     Rect screenRect(0.0f, 0.0f, (float)vp.z, (float)vp.w);
 
@@ -135,45 +141,11 @@ void VideoQuad::FitToScreen()
         if (wrapper != nullptr && wrapper != this)
         {
             screenRect = wrapper->GetRect();
-
-            if (parent == nullptr && GetWorld() != nullptr)
-            {
-                parent = wrapper;
-            }
         }
     }
 #endif
 
-    Rect parentRect = (parent != nullptr) ? parent->GetRect() : screenRect;
-
-    // Full stretch with pixel margins that place each edge on the screen's edge,
-    // whatever this widget is parented under.
-    const glm::vec2 offset(
-        screenRect.mX - parentRect.mX,
-        screenRect.mY - parentRect.mY);
-    const glm::vec2 size(
-        (parentRect.mX + parentRect.mWidth) - (screenRect.mX + screenRect.mWidth),
-        (parentRect.mY + parentRect.mHeight) - (screenRect.mY + screenRect.mHeight));
-    const uint8_t margins = MF_Left | MF_Top | MF_Right | MF_Bottom;
-
-    const bool rectMatches =
-        mRect.mX == screenRect.mX &&
-        mRect.mY == screenRect.mY &&
-        mRect.mWidth == screenRect.mWidth &&
-        mRect.mHeight == screenRect.mHeight;
-
-    if (mAnchorMode != AnchorMode::FullStretch ||
-        mActiveMargins != margins ||
-        mOffset != offset ||
-        mSize != size ||
-        !rectMatches)
-    {
-        mAnchorMode = AnchorMode::FullStretch;
-        mActiveMargins = margins;
-        mOffset = offset;
-        mSize = size;
-        MarkDirty();
-    }
+    return screenRect;
 }
 
 void VideoQuad::Render()
@@ -202,6 +174,10 @@ void VideoQuad::SyncPlayerSettings()
     mPlayer.SetLoop(mLoop);
     mPlayer.SetVolume(mVolume);
     mPlayer.SetAudioEnabled(mAudioEnabled);
+
+    // Widgets draw with their own TEV setup, so on GameCube/Wii frames can stay YUV
+    // and be converted to RGB on the GPU. Off uses CPU conversion instead.
+    mPlayer.SetUseYuv(mGpuColorConversion);
 }
 
 void VideoQuad::ApplyVideoTexture()

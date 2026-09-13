@@ -63,7 +63,7 @@ protected:
     void TickCommon();
     void SyncPlayerSettings();
     void ApplyVideoTexture();
-    void FitToScreen();
+    Rect GetScreenRect();
 
     // Properties
     AssetRef mVideoClip;
@@ -71,6 +71,7 @@ protected:
     bool mLoop = false;
     bool mAudioEnabled = true;
     bool mFillScreen = true;
+    bool mGpuColorConversion = true;
     float mVolume = 1.0f;
 
     // State

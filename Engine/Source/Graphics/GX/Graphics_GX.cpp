@@ -1239,6 +1239,12 @@ static void SetupYuvTevStages(Texture* texture, GXColor uniformColor)
     GX_LoadTexObj(&resource->mGxTexObjCb, GX_TEXMAP1);   // Cb
     GX_LoadTexObj(&resource->mGxTexObjCr, GX_TEXMAP2);   // Cr
 
+    // Normalized texture coordinates are scaled per texcoord by the size of the texture
+    // they're paired with, so the half-size chroma planes need their own texcoord
+    // (sharing TEXCOORD0 with the luma plane samples one of them at the wrong scale).
+    GX_SetNumTexGens(2);
+    GX_SetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
+
     GX_SetNumTevStages(8);
 
     GX_SetTevColorS10(GX_TEVREG0, { -90, 68, -113, 0 }); // Offsets / 2
@@ -1264,7 +1270,7 @@ static void SetupYuvTevStages(Texture* texture, GXColor uniformColor)
     for (uint32_t i = 0; i < 4; ++i)
     {
         const uint8_t stage = chromaStages[i];
-        GX_SetTevOrder(stage, GX_TEXCOORD0, chromaMaps[i], GX_COLORNULL);
+        GX_SetTevOrder(stage, GX_TEXCOORD1, chromaMaps[i], GX_COLORNULL);
         GX_SetTevKColorSel(stage, chromaKonst[i]);
         GX_SetTevColorIn(stage, GX_CC_ZERO, GX_CC_TEXC, GX_CC_KONST, GX_CC_CPREV);
         GX_SetTevColorOp(stage, chromaOps[i], GX_TB_ZERO, GX_CS_SCALE_1, GX_FALSE, GX_TEVPREV);
