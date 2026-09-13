@@ -1134,18 +1134,13 @@ std::string SYS_GetClipboardText()
 // Misc
 void SYS_Log(LogSeverity severity, const char* format, va_list arg)
 {
-    // SYS_Report() allows logging in Dolphin with a .dol file.
-    // Printf logging requires .elf.
-    char logBuffer[256];
-    vsnprintf(logBuffer, 255, format, arg);
-
-    SYS_Report(logBuffer);
-    SYS_Report("\n");
-
-    // I'm not sure if printf() is needed for the libogc console, but the console
-    // is currently broken right now and causes octave to crash.
-    //vprintf(format, arg);
-    //printf("\n");
+    // NOTE: do NOT route logging through SYS_Report() on console. On mainline libogc
+    // the debug-output path clobbers the OS low-memory globals on every call (per
+    // Extrems / libogc2, where it's instead guarded behind a dev-console type or
+    // redirected to a USB Gecko). Emitting it here corrupts OS state intermittently.
+    // Logging is a no-op on console; for ISO/asset tracing use the local git-ignored
+    // file logger (IsoLog_local.h -> /octiso.log), which never touches the OS globals.
+    (void)severity; (void)format; (void)arg;
 }
 
 void SYS_Assert(const char* exprString, const char* fileString, uint32_t lineNumber)
