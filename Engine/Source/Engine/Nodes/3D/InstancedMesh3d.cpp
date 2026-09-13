@@ -284,8 +284,10 @@ glm::mat4 InstancedMesh3D::CalculateInstanceTransform(int32_t instanceIndex)
         const MeshInstanceData& instData = mInstanceData[instanceIndex];
 
         glm::quat rotQuat = glm::quat(instData.mRotation * DEGREES_TO_RADIANS);
-        float scaleX = instData.mScale.x;
-        glm::vec3 scale = glm::vec3(scaleX, scaleX, scaleX);
+        // Full non-uniform scale — the GC/Wii Unroll() path already honors the
+        // whole vec3 (MakeTransform), so uniform-from-x here made the Vulkan
+        // renderer diverge for stretched instances (e.g. foam strips).
+        glm::vec3 scale = instData.mScale;
 
         transform = glm::translate(transform, instData.mPosition);
         transform *= glm::toMat4(rotQuat);
