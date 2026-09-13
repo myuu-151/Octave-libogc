@@ -173,7 +173,7 @@ static int       sIsoMode = ISO_NONE;
 // SD card): the game reads its assets off the emulated drive via our DI reader, exercising
 // the exact real-disc path. VERIFIED in Dolphin (mount OK, FST parsed, assets stream).
 // NOTE: value of 1 will NOT run on an SD rig (no disc). Tracing goes to the SD file logger
-// (no SYS_Report), so it no longer clobbers OS globals. Leave 0 for shipping builds.
+// (no SYS_Report), so it no longer overwrites the RTC counter. Leave 0 for shipping builds.
 #define OCT_FORCE_DVD 0
 
 static bool IsoMounted() { return sIsoMode != ISO_NONE; }
@@ -1173,12 +1173,14 @@ std::string SYS_GetClipboardText()
 // Misc
 void SYS_Log(LogSeverity severity, const char* format, va_list arg)
 {
-    // NOTE: do NOT route logging through SYS_Report() on console. On mainline libogc
-    // the debug-output path clobbers the OS low-memory globals on every call (per
-    // Extrems / libogc2, where it's instead guarded behind a dev-console type or
-    // redirected to a USB Gecko). Emitting it here corrupts OS state intermittently.
-    // Logging is a no-op on console; for ISO/asset tracing use the local git-ignored
-    // file logger (IsoLog_local.h -> /octiso.log), which never touches the OS globals.
+    // NOTE: do NOT route logging through SYS_Report() on console. Per Extrems, libogc's
+    // debug-output (OSReport/SYS_Report) path OVERWRITES THE RTC COUNTER on every call --
+    // a low-memory timekeeping field. To be precise about the mechanism: SYS_Report
+    // clobbers the RTC counter, NOT the OS low-memory globals in general -- corruption of
+    // the broader OS globals is a separate libogc issue, not this debug path. Either way,
+    // overwriting the RTC counter is real low-mem state corruption, so logging is a no-op
+    // on console; for ISO/asset tracing use the local git-ignored file logger
+    // (IsoLog_local.h -> /octiso.log), which touches neither the RTC counter nor the OS globals.
     (void)severity; (void)format; (void)arg;
 }
 
