@@ -40,6 +40,10 @@ bool VideoQuad::HandleVideoPropChange(Datum* datum, uint32_t index, const void* 
 VideoQuad::VideoQuad()
 {
     SetName("Video");
+
+    // Widgets draw with their own TEV setup, so on GameCube/Wii frames can stay YUV
+    // and be converted to RGB on the GPU.
+    mPlayer.SetUseYuv(true);
 }
 
 VideoQuad::~VideoQuad()

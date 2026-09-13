@@ -197,6 +197,9 @@
     <ClCompile Include="Source\Engine\VideoPlayer.cpp">
       <Filter>Source Files\Engine</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Engine\JpegYuvDecoder.cpp">
+      <Filter>Source Files\Engine</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Engine\Utilities.cpp">
       <Filter>Source Files\Engine</Filter>
     </ClCompile>
@@ -1132,6 +1135,9 @@
       <Filter>Source Files\Engine</Filter>
     </ClInclude>
     <ClInclude Include="Source\Engine\VideoPlayer.h">
+      <Filter>Source Files\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Engine\JpegYuvDecoder.h">
       <Filter>Source Files\Engine</Filter>
     </ClInclude>
     <ClInclude Include="Source\Graphics\GraphicsConstants.h">

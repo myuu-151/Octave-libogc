@@ -1,15 +1,15 @@
 #pragma once
 
 #include "AssetRef.h"
+#include "VideoStream.h"
 
 #include <cstdint>
 #include <vector>
 
 class VideoClip;
-class VideoStream;
 class Texture;
 
-// Plays a VideoClip: runs a VideoStream decoder, writes the current frame into a
+// Plays a VideoClip: runs a VideoStream decoder, shows the current frame in a
 // dynamic texture, streams the audio, and keeps the two in sync. Shared by the
 // nodes that display video (Video3D on a mesh, VideoQuad as a widget), which just
 // decide where GetTexture() is shown.
@@ -40,20 +40,27 @@ public:
     void SetVolume(float volume);
     void SetAudioEnabled(bool enabled);   // Applies the next time a video opens
 
+    // On GameCube/Wii, output YUV frames that the GPU converts to RGB (fastest; only
+    // widgets can draw them). Otherwise frames are RGBA. Applies the next time a video opens.
+    void SetUseYuv(bool useYuv);
+
 private:
 
     bool Open(VideoClip* clip);
     void Close();
     void SeekInternal(double seconds);
+    void ReleaseDisplayedFrame();
 
     bool mLoop = false;
     float mVolume = 1.0f;
     bool mAudioEnabled = true;
+    bool mUseYuv = false;
 
     VideoStream* mStream = nullptr;
     VideoClip* mOpenClip = nullptr;
     uint32_t mOpenRevision = 0;
     TextureRef mTexture;
+    VideoStream::Frame mDisplayedFrame;
     uint32_t mAudioStream = 0;
     std::vector<uint8_t> mAudioScratch;
 

@@ -287,6 +287,11 @@ void GFX_UpdateTextureResourcePixels(Texture* texture, const uint8_t* rgba8)
     }
 }
 
+void GFX_SetTextureResourceData(Texture* texture, uint8_t* const* planes)
+{
+    // GameCube/Wii only; Vulkan textures are updated with GFX_UpdateTextureResourcePixels().
+}
+
 void GFX_CreateMaterialResource(Material* material)
 {
     if (IsHeadless()) return;

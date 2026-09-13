@@ -84,7 +84,12 @@ protected:
     int32_t mCookHeight = 0;         // 0 = keep the source aspect ratio
     int32_t mCookFps = 24;
     int32_t mCookQuality = 5;        // ffmpeg -q:v, 2 (best) to 31 (smallest)
-    int32_t mCookAudioChannels = 2;  // Audio is always cooked at 44100 Hz
+    int32_t mCookAudioChannels = 2;
+    // Keep the source's own values instead of the settings above (read with ffprobe).
+    // Dimensions still round down to multiples of 16, and at most 1024.
+    bool mNativeResolution = false;
+    bool mNativeFrameRate = false;
+    bool mNativeSampleRate = false;  // Otherwise audio is cooked at 44100 Hz
 
     // Cooked format
     uint32_t mWidth = 0;

@@ -376,27 +376,55 @@ void GFX_CreateTextureResource(Texture* texture, std::vector<uint8_t>& data)
 
     if (texture->IsDynamic())
     {
-        // Raw GX_TF_RGBA8 texel memory that GFX_UpdateTextureResourcePixels() rewrites
-        // in place. Clamp wrapping, since the dimensions needn't be powers of two.
+        // Dynamic textures (e.g. video) use raw texel memory instead of a TPL: a
+        // GX_TF_RGBA8 buffer, or for YUV textures three GX_TF_I8 planes that TEV
+        // converts to RGB when drawn. GFX_SetTextureResourceData() can point them at
+        // external memory instead. Clamp wrapping, since sizes needn't be powers of two.
         const uint32_t width = texture->GetWidth();
         const uint32_t height = texture->GetHeight();
-        resource->mDynamicSize = ((width + 3) & ~3u) * ((height + 3) & ~3u) * 4;
-        resource->mDynamicData = SYS_AlignedMalloc(resource->mDynamicSize, 32);
 
-        if (resource->mDynamicData == nullptr)
+        if (texture->IsYuv())
         {
-            LogError("Failed to allocate %u bytes for dynamic texture", resource->mDynamicSize);
-            resource->mDynamicSize = 0;
-            return;
+            const uint32_t lumaSize = width * height;
+            const uint32_t chromaSize = (width / 2) * (height / 2);
+            resource->mDynamicData = SYS_AlignedMalloc(lumaSize, 32);
+            resource->mDynamicCb = SYS_AlignedMalloc(chromaSize, 32);
+            resource->mDynamicCr = SYS_AlignedMalloc(chromaSize, 32);
+
+            if (resource->mDynamicData == nullptr || resource->mDynamicCb == nullptr || resource->mDynamicCr == nullptr)
+            {
+                LogError("Failed to allocate %ux%u YUV dynamic texture", width, height);
+                GFX_DestroyTextureResource(texture);
+                return;
+            }
+
+            // Black: Y = 0, Cb = Cr = 128.
+            memset(resource->mDynamicData, 0, lumaSize);
+            memset(resource->mDynamicCb, 128, chromaSize);
+            memset(resource->mDynamicCr, 128, chromaSize);
+            DCFlushRange(resource->mDynamicData, lumaSize);
+            DCFlushRange(resource->mDynamicCb, chromaSize);
+            DCFlushRange(resource->mDynamicCr, chromaSize);
+            resource->mDynamicSize = lumaSize;
+        }
+        else
+        {
+            resource->mDynamicSize = ((width + 3) & ~3u) * ((height + 3) & ~3u) * 4;
+            resource->mDynamicData = SYS_AlignedMalloc(resource->mDynamicSize, 32);
+
+            if (resource->mDynamicData == nullptr)
+            {
+                LogError("Failed to allocate %u bytes for dynamic texture", resource->mDynamicSize);
+                resource->mDynamicSize = 0;
+                return;
+            }
+
+            memset(resource->mDynamicData, 0, resource->mDynamicSize);
         }
 
-        memset(resource->mDynamicData, 0, resource->mDynamicSize);
+        GFX_SetTextureResourceData(texture, nullptr);
 
-        uint8_t filter = (texture->GetFilterType() == FilterType::Nearest) ? GX_NEAR : GX_LINEAR;
-        GX_InitTexObj(&resource->mGxTexObj, resource->mDynamicData, width, height, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
-        GX_InitTexObjFilterMode(&resource->mGxTexObj, filter, filter);
-
-        if (data.size() == width * height * 4)
+        if (!texture->IsYuv() && data.size() == width * height * 4)
         {
             GFX_UpdateTextureResourcePixels(texture, data.data());
         }
@@ -445,14 +473,20 @@ void GFX_DestroyTextureResource(Texture* texture)
 
     if (texture->IsDynamic())
     {
-        if (resource->mDynamicData != nullptr)
+        void** buffers[3] = { &resource->mDynamicData, &resource->mDynamicCb, &resource->mDynamicCr };
+        for (void** buffer : buffers)
         {
-            SYS_AlignedFree(resource->mDynamicData);
-            resource->mDynamicData = nullptr;
+            if (*buffer != nullptr)
+            {
+                SYS_AlignedFree(*buffer);
+                *buffer = nullptr;
+            }
         }
 
         resource->mDynamicSize = 0;
         resource->mGxTexObj = { };
+        resource->mGxTexObjCb = { };
+        resource->mGxTexObjCr = { };
         return;
     }
 
@@ -470,7 +504,7 @@ void GFX_DestroyTextureResource(Texture* texture)
 void GFX_UpdateTextureResourcePixels(Texture* texture, const uint8_t* rgba8)
 {
     TextureResource* resource = texture->GetResource();
-    if (resource->mDynamicData == nullptr || rgba8 == nullptr)
+    if (resource->mDynamicData == nullptr || rgba8 == nullptr || texture->IsYuv())
     {
         return;
     }
@@ -513,6 +547,42 @@ void GFX_UpdateTextureResourcePixels(Texture* texture, const uint8_t* rgba8)
     }
 
     DCFlushRange(resource->mDynamicData, resource->mDynamicSize);
+    GX_InvalidateTexAll();
+}
+
+void GFX_SetTextureResourceData(Texture* texture, uint8_t* const* planes)
+{
+    TextureResource* resource = texture->GetResource();
+    if (resource->mDynamicData == nullptr)
+    {
+        return;
+    }
+
+    const uint32_t width = texture->GetWidth();
+    const uint32_t height = texture->GetHeight();
+    const uint8_t filter = (texture->GetFilterType() == FilterType::Nearest) ? GX_NEAR : GX_LINEAR;
+
+    if (texture->IsYuv())
+    {
+        void* luma = planes ? planes[0] : resource->mDynamicData;
+        void* cb = planes ? planes[1] : resource->mDynamicCb;
+        void* cr = planes ? planes[2] : resource->mDynamicCr;
+
+        GX_InitTexObj(&resource->mGxTexObj, luma, width, height, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+        GX_InitTexObjFilterMode(&resource->mGxTexObj, filter, filter);
+        GX_InitTexObj(&resource->mGxTexObjCb, cb, width / 2, height / 2, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+        GX_InitTexObjFilterMode(&resource->mGxTexObjCb, filter, filter);
+        GX_InitTexObj(&resource->mGxTexObjCr, cr, width / 2, height / 2, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+        GX_InitTexObjFilterMode(&resource->mGxTexObjCr, filter, filter);
+    }
+    else
+    {
+        void* texels = planes ? planes[0] : resource->mDynamicData;
+
+        GX_InitTexObj(&resource->mGxTexObj, texels, width, height, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+        GX_InitTexObjFilterMode(&resource->mGxTexObj, filter, filter);
+    }
+
     GX_InvalidateTexAll();
 }
 
@@ -1155,31 +1225,110 @@ void GFX_UpdateQuadResourceVertexData(Quad* quad)
 
 }
 
+// TEV setup for YUV textures (video): converts full-range (JPEG) YCbCr to RGB on
+// the GPU, then applies vertex color and the widget's uniform color.
+//   R = Y + 1.402 (Cr - 0.5)
+//   G = Y - 0.344 (Cb - 0.5) - 0.714 (Cr - 0.5)
+//   B = Y + 1.772 (Cb - 0.5)
+// Computed at half scale so every coefficient fits an 8-bit konst color, then
+// doubled. Intermediate stages don't clamp, so negative values carry through.
+static void SetupYuvTevStages(Texture* texture, GXColor uniformColor)
+{
+    TextureResource* resource = texture->GetResource();
+    GX_LoadTexObj(&resource->mGxTexObj, GX_TEXMAP0);     // Y
+    GX_LoadTexObj(&resource->mGxTexObjCb, GX_TEXMAP1);   // Cb
+    GX_LoadTexObj(&resource->mGxTexObjCr, GX_TEXMAP2);   // Cr
+
+    GX_SetNumTevStages(8);
+
+    GX_SetTevColorS10(GX_TEVREG0, { -90, 68, -113, 0 }); // Offsets / 2
+    GX_SetTevColor(GX_TEVREG1, uniformColor);
+    GX_SetTevKColor(GX_KCOLOR0, { 179, 0, 0, 0 });       // Cr -> R  (1.402 / 2)
+    GX_SetTevKColor(GX_KCOLOR1, { 0, 91, 0, 0 });        // Cr -> G  (0.714 / 2)
+    GX_SetTevKColor(GX_KCOLOR2, { 0, 0, 226, 0 });       // Cb -> B  (1.772 / 2)
+    GX_SetTevKColor(GX_KCOLOR3, { 0, 44, 0, 0 });        // Cb -> G  (0.344 / 2)
+
+    // Stage 0: Y / 2 + offsets
+    GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLORNULL);
+    GX_SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_TEXC, GX_CC_HALF, GX_CC_C0);
+    GX_SetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_FALSE, GX_TEVPREV);
+    GX_SetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO);
+    GX_SetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+
+    // Stages 1-4: add / subtract each chroma channel times its per-channel coefficients
+    const uint8_t chromaStages[4] = { GX_TEVSTAGE1, GX_TEVSTAGE2, GX_TEVSTAGE3, GX_TEVSTAGE4 };
+    const uint32_t chromaMaps[4] = { GX_TEXMAP2, GX_TEXMAP2, GX_TEXMAP1, GX_TEXMAP1 };
+    const uint8_t chromaKonst[4] = { GX_TEV_KCSEL_K0, GX_TEV_KCSEL_K1, GX_TEV_KCSEL_K2, GX_TEV_KCSEL_K3 };
+    const uint8_t chromaOps[4] = { GX_TEV_ADD, GX_TEV_SUB, GX_TEV_ADD, GX_TEV_SUB };
+
+    for (uint32_t i = 0; i < 4; ++i)
+    {
+        const uint8_t stage = chromaStages[i];
+        GX_SetTevOrder(stage, GX_TEXCOORD0, chromaMaps[i], GX_COLORNULL);
+        GX_SetTevKColorSel(stage, chromaKonst[i]);
+        GX_SetTevColorIn(stage, GX_CC_ZERO, GX_CC_TEXC, GX_CC_KONST, GX_CC_CPREV);
+        GX_SetTevColorOp(stage, chromaOps[i], GX_TB_ZERO, GX_CS_SCALE_1, GX_FALSE, GX_TEVPREV);
+        GX_SetTevAlphaIn(stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+        GX_SetTevAlphaOp(stage, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    }
+
+    // Stage 5: double back to full scale and clamp
+    GX_SetTevOrder(GX_TEVSTAGE5, GX_TEXCOORDNULL, GX_TEXMAP_DISABLE, GX_COLORNULL);
+    GX_SetTevColorIn(GX_TEVSTAGE5, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+    GX_SetTevColorOp(GX_TEVSTAGE5, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_2, GX_TRUE, GX_TEVPREV);
+    GX_SetTevAlphaIn(GX_TEVSTAGE5, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+    GX_SetTevAlphaOp(GX_TEVSTAGE5, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+
+    // Stage 6: modulate by vertex color
+    GX_SetTevOrder(GX_TEVSTAGE6, GX_TEXCOORDNULL, GX_TEXMAP_DISABLE, GX_COLOR0A0);
+    GX_SetTevColorIn(GX_TEVSTAGE6, GX_CC_ZERO, GX_CC_CPREV, GX_CC_RASC, GX_CC_ZERO);
+    GX_SetTevColorOp(GX_TEVSTAGE6, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GX_SetTevAlphaIn(GX_TEVSTAGE6, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA);
+    GX_SetTevAlphaOp(GX_TEVSTAGE6, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+
+    // Stage 7: modulate by the widget's uniform color
+    GX_SetTevOrder(GX_TEVSTAGE7, GX_TEXCOORDNULL, GX_TEXMAP_DISABLE, GX_COLOR0A0);
+    GX_SetTevColorIn(GX_TEVSTAGE7, GX_CC_ZERO, GX_CC_C1, GX_CC_CPREV, GX_CC_ZERO);
+    GX_SetTevColorOp(GX_TEVSTAGE7, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GX_SetTevAlphaIn(GX_TEVSTAGE7, GX_CA_ZERO, GX_CA_A1, GX_CA_APREV, GX_CA_ZERO);
+    GX_SetTevAlphaOp(GX_TEVSTAGE7, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+}
+
 void GFX_DrawQuad(Quad* quad)
 {
     // Setup render state / TEVs
     Renderer* renderer = Renderer::Get();
     Texture* texture = quad->GetTexture() ? quad->GetTexture() : renderer->mWhiteTexture.Get<Texture>();
 
-    GX_SetNumTevStages(2);
+    glm::vec4 uniColor = glm::clamp(quad->GetColor(), 0.0f, 1.0f);
+    GXColor uniColorGx = { uint8_t(uniColor.r * 255.0f),
+                           uint8_t(uniColor.g * 255.0f),
+                           uint8_t(uniColor.b * 255.0f),
+                           uint8_t(uniColor.a * 255.0f) };
+
     GX_SetNumTexGens(1);
     GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
-    GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
-    GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
-    GX_LoadTexObj(&texture->GetResource()->mGxTexObj, GX_TEXMAP0);
 
-    // TEV1 applies uniform color modulation
-    glm::vec4 uniColor = glm::clamp(quad->GetColor(), 0.0f, 1.0f);
-    GX_SetTevColor(GX_TEVREG0, { uint8_t(uniColor.r * 255.0f),
-                                 uint8_t(uniColor.g * 255.0f),
-                                 uint8_t(uniColor.b * 255.0f),
-                                 uint8_t(uniColor.a * 255.0f) });
+    if (texture->IsYuv())
+    {
+        SetupYuvTevStages(texture, uniColorGx);
+    }
+    else
+    {
+        GX_SetNumTevStages(2);
+        GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
+        GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+        GX_LoadTexObj(&texture->GetResource()->mGxTexObj, GX_TEXMAP0);
 
-    GX_SetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_C0, GX_CC_CPREV, GX_CC_ZERO);
-    GX_SetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_A0, GX_CA_APREV, GX_CA_ZERO);
-    GX_SetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-    GX_SetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-    GX_SetTevOrder(GX_TEVSTAGE1, GX_TEXCOORDNULL, GX_TEXMAP_DISABLE, GX_COLOR0A0);
+        // TEV1 applies uniform color modulation
+        GX_SetTevColor(GX_TEVREG0, uniColorGx);
+
+        GX_SetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_C0, GX_CC_CPREV, GX_CC_ZERO);
+        GX_SetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_A0, GX_CA_APREV, GX_CA_ZERO);
+        GX_SetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GX_SetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GX_SetTevOrder(GX_TEVSTAGE1, GX_TEXCOORDNULL, GX_TEXMAP_DISABLE, GX_COLOR0A0);
+    }
 
     GX_SetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
     GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);

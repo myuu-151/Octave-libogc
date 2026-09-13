@@ -37,6 +37,11 @@ public:
     bool IsDynamic() const;
     void UpdatePixels(const uint8_t* rgba8);
 
+    // A dynamic texture made of Y, Cb and Cr planes (GameCube/Wii), converted to RGB
+    // by the GPU when drawn by a widget. Its data is set with GFX_SetTextureResourceData().
+    void InitDynamicYuv(uint32_t width, uint32_t height);
+    bool IsYuv() const;
+
     void SetMipmapped(bool mipmapped);
     bool IsMipmapped() const;
     bool IsRenderTarget() const;
@@ -74,6 +79,7 @@ protected:
     bool mForceHighQuality;
     uint8_t mLowQualityDownsampleFactor;
     bool mDynamic = false;
+    bool mYuv = false;
 
     // This pixel array is used as an intermediate storage between LoadStream() and Create()
     // It is cleared and shrunk within Create() except when compiled for EDITOR

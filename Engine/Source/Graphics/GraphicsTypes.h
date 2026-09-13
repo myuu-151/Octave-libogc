@@ -129,8 +129,14 @@ struct TextureResource
     GXTexObj mGxTexObj = {};
     TPLFile mTplFile = {};
     void* mTplData = nullptr;
-    void* mDynamicData = nullptr;   // GX_TF_RGBA8 texels of a dynamic texture
+    // Dynamic textures: GX_TF_RGBA8 texels, or the Y plane of a YUV texture.
+    void* mDynamicData = nullptr;
     uint32_t mDynamicSize = 0;
+    // YUV textures: chroma planes and their texture objects.
+    void* mDynamicCb = nullptr;
+    void* mDynamicCr = nullptr;
+    GXTexObj mGxTexObjCb = {};
+    GXTexObj mGxTexObjCr = {};
 #elif API_C3D
     C3D_Tex mTex = {};
     void* mT3dsData = nullptr;

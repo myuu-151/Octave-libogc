@@ -75,6 +75,10 @@ void GFX_CreateTextureResource(Texture* texture, std::vector<uint8_t>& data);
 void GFX_DestroyTextureResource(Texture* texture);
 // Replaces the pixels of a dynamic texture (see Texture::InitDynamic) with width * height RGBA8.
 void GFX_UpdateTextureResourcePixels(Texture* texture, const uint8_t* rgba8);
+// GameCube/Wii: points a dynamic texture at external texel memory (planes[0] for
+// RGBA8, Y/Cb/Cr planes for YUV) without copying, or back to its own memory if
+// planes is null. The memory must stay valid while the texture uses it.
+void GFX_SetTextureResourceData(Texture* texture, uint8_t* const* planes);
 
 // Material
 void GFX_CreateMaterialResource(Material* material);

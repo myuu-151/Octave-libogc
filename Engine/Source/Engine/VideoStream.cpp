@@ -1,15 +1,15 @@
 #include "VideoStream.h"
 
+#include "JpegYuvDecoder.h"
 #include "Assets/VideoClip.h"
 #include "System/System.h"
 
 #if PLATFORM_DOLPHIN
 #include <gccore.h>
-#endif
-
+#else
 #if !EDITOR
 // Editor builds get the full stb_image implementation from stb_implementation.cpp.
-// Runtime builds only need baseline JPEG for video frames.
+// Other runtime builds only need baseline JPEG for video frames.
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_JPEG
 #define STBI_NO_STDIO
@@ -27,16 +27,79 @@
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
+#endif
 
 #include <cstring>
 
-// Decoded frames waiting to be shown. Small, since each is width * height * 4 bytes
-// and the decoder only needs to stay slightly ahead of playback.
+// Decoded frames waiting to be shown. Kept small: the decoder only needs to stay
+// slightly ahead of playback, and on GameCube every frame costs precious RAM.
+#if PLATFORM_DOLPHIN
+static constexpr size_t kMaxQueuedFrames = 2;
+#else
 static constexpr size_t kMaxQueuedFrames = 3;
+#endif
+
+// Records in a row that fail to load or decode before playback gives up.
+static constexpr uint32_t kMaxConsecutiveFailures = 30;
 
 static inline uint32_t ReadU32LE(const uint8_t* p)
 {
     return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+}
+
+static inline uint8_t Clamp8(int32_t x)
+{
+    if (uint32_t(x) > 255)
+    {
+        return (x < 0) ? 0 : 255;
+    }
+    return uint8_t(x);
+}
+
+// Full-range (JPEG) YCbCr to GX_TF_RGBA8 texels: 4x4 blocks of 16 (A,R) byte pairs
+// then 16 (G,B) pairs. Dimensions are multiples of 16.
+static void ConvertYuvToGxRgba8(
+    const uint8_t* yPlane,
+    const uint8_t* cbPlane,
+    const uint8_t* crPlane,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* dst)
+{
+    const uint32_t chromaWidth = width / 2;
+    uint8_t* block = dst;
+
+    for (uint32_t by = 0; by < height / 4; ++by)
+    {
+        for (uint32_t bx = 0; bx < width / 4; ++bx)
+        {
+            uint8_t* arPlane = block;
+            uint8_t* gbPlane = block + 32;
+
+            for (uint32_t py = 0; py < 4; ++py)
+            {
+                const uint32_t y = by * 4 + py;
+                const uint8_t* lumaRow = yPlane + y * width;
+                const uint32_t chromaRow = (y / 2) * chromaWidth;
+
+                for (uint32_t px = 0; px < 4; ++px)
+                {
+                    const uint32_t x = bx * 4 + px;
+                    const int32_t luma = lumaRow[x];
+                    const int32_t cb = int32_t(cbPlane[chromaRow + x / 2]) - 128;
+                    const int32_t cr = int32_t(crPlane[chromaRow + x / 2]) - 128;
+                    const uint32_t i = (py * 4 + px) * 2;
+
+                    arPlane[i] = 255;
+                    arPlane[i + 1] = Clamp8(luma + ((91881 * cr) >> 16));
+                    gbPlane[i] = Clamp8(luma - ((22554 * cb + 46802 * cr) >> 16));
+                    gbPlane[i + 1] = Clamp8(luma + ((116130 * cb) >> 16));
+                }
+            }
+
+            block += 64;
+        }
+    }
 }
 
 VideoStream::VideoStream()
@@ -49,7 +112,7 @@ VideoStream::~VideoStream()
     Close();
 }
 
-bool VideoStream::Open(VideoClip* clip)
+bool VideoStream::Open(VideoClip* clip, VideoFrameFormat format)
 {
     Close();
 
@@ -59,12 +122,32 @@ bool VideoStream::Open(VideoClip* clip)
     }
 
     mClip = clip;
+    mFormat = format;
+    mWidth = clip->GetWidth();
+    mHeight = clip->GetHeight();
+
+    // The GX formats decode with JpegYuvDecoder, which needs whole 16x16 macroblocks.
+    if (format != VideoFrameFormat::Rgba8 && ((mWidth % 16) != 0 || (mHeight % 16) != 0))
+    {
+        mClip = nullptr;
+        return false;
+    }
+
     mNextRecord = 0;
     mGeneration = 0;
     mSeekRecord = -1;
+    mDroppedFrames = 0;
+    mConsecutiveFailures = 0;
     mDecodedAll = false;
     mError = false;
     mExit = false;
+
+    if (!AllocateBuffers())
+    {
+        FreeBuffers();
+        mClip = nullptr;
+        return false;
+    }
 
     mMutex = SYS_CreateMutex();
     mThread = SYS_CreateThread(ThreadMain, this);
@@ -88,12 +171,112 @@ void VideoStream::Close()
 
     if (mMutex != nullptr)
     {
-        ClearQueues();
+        ClearQueuesLocked();
         SYS_DestroyMutex(mMutex);
         mMutex = nullptr;
     }
 
+    FreeBuffers();
     mClip = nullptr;
+}
+
+bool VideoStream::AllocateBuffers()
+{
+    mRecord.resize(mClip->GetMaxRecordSize());
+
+    const uint32_t lumaSize = mWidth * mHeight;
+    const uint32_t chromaSize = (mWidth / 2) * (mHeight / 2);
+    uint32_t planeSizes[3] = { 0, 0, 0 };
+
+    if (mFormat == VideoFrameFormat::GxYuv420)
+    {
+        planeSizes[0] = lumaSize;
+        planeSizes[1] = chromaSize;
+        planeSizes[2] = chromaSize;
+    }
+    else
+    {
+        planeSizes[0] = lumaSize * 4;
+    }
+
+    if (mFormat != VideoFrameFormat::Rgba8)
+    {
+        mJpeg = new JpegYuvDecoder();
+    }
+
+    if (mFormat == VideoFrameFormat::GxRgba8)
+    {
+        // Row-major planes to decode into before converting to RGBA.
+        const uint32_t scratchSizes[3] = { lumaSize, chromaSize, chromaSize };
+        for (uint32_t p = 0; p < 3; ++p)
+        {
+            mScratchPlanes[p] = (uint8_t*)SYS_AlignedMalloc(scratchSizes[p], 32);
+            if (mScratchPlanes[p] == nullptr)
+            {
+                return false;
+            }
+        }
+    }
+
+    // Frames that can exist at once: the queue, the one on screen, and one being decoded.
+    const uint32_t numSlots = uint32_t(kMaxQueuedFrames) + 2;
+    mSlots.resize(numSlots);
+    mFreeSlots.clear();
+
+    for (uint32_t i = 0; i < numSlots; ++i)
+    {
+        for (uint32_t p = 0; p < 3; ++p)
+        {
+            if (planeSizes[p] == 0)
+            {
+                continue;
+            }
+
+            mSlots[i].mPlanes[p] = (uint8_t*)SYS_AlignedMalloc(planeSizes[p], 32);
+            mSlots[i].mSizes[p] = planeSizes[p];
+
+            if (mSlots[i].mPlanes[p] == nullptr)
+            {
+                return false;
+            }
+        }
+
+        mFreeSlots.push_back(int32_t(i));
+    }
+
+    return true;
+}
+
+void VideoStream::FreeBuffers()
+{
+    for (Slot& slot : mSlots)
+    {
+        for (uint32_t p = 0; p < 3; ++p)
+        {
+            if (slot.mPlanes[p] != nullptr)
+            {
+                SYS_AlignedFree(slot.mPlanes[p]);
+            }
+        }
+    }
+
+    mSlots.clear();
+    mFreeSlots.clear();
+
+    for (uint32_t p = 0; p < 3; ++p)
+    {
+        if (mScratchPlanes[p] != nullptr)
+        {
+            SYS_AlignedFree(mScratchPlanes[p]);
+            mScratchPlanes[p] = nullptr;
+        }
+    }
+
+    delete mJpeg;
+    mJpeg = nullptr;
+
+    mRecord.clear();
+    mRecord.shrink_to_fit();
 }
 
 double VideoStream::Seek(double seconds)
@@ -111,7 +294,8 @@ double VideoStream::Seek(double seconds)
     mSeekRecord = record;
     mGeneration++;
     mDecodedAll = false;
-    ClearQueues();
+    mConsecutiveFailures = 0;
+    ClearQueuesLocked();
 
     return record / frameRate;
 }
@@ -130,7 +314,7 @@ bool VideoStream::PopFrame(double maxTime, Frame& outFrame)
     {
         if (found)
         {
-            FreeFrame(outFrame);
+            ReleaseSlotLocked(outFrame.mSlot);
         }
 
         outFrame = mFrames.front();
@@ -141,13 +325,15 @@ bool VideoStream::PopFrame(double maxTime, Frame& outFrame)
     return found;
 }
 
-void VideoStream::FreeFrame(Frame& frame)
+void VideoStream::ReleaseFrame(Frame& frame)
 {
-    if (frame.mPixels != nullptr)
+    if (mMutex != nullptr && frame.mSlot >= 0)
     {
-        stbi_image_free(frame.mPixels);
-        frame.mPixels = nullptr;
+        SCOPED_LOCK(mMutex);
+        ReleaseSlotLocked(frame.mSlot);
     }
+
+    frame = Frame();
 }
 
 bool VideoStream::HasQueuedFrames()
@@ -195,12 +381,25 @@ bool VideoStream::HasError()
     return mError;
 }
 
+uint32_t VideoStream::TakeDroppedFrames()
+{
+    if (mMutex == nullptr)
+    {
+        return 0;
+    }
+
+    SCOPED_LOCK(mMutex);
+    const uint32_t dropped = mDroppedFrames;
+    mDroppedFrames = 0;
+    return dropped;
+}
+
 ThreadFuncRet VideoStream::ThreadMain(void* arg)
 {
 #if PLATFORM_DOLPHIN
     // The main thread runs at priority 64. Decoding below it means the decoder only
     // gets time the main thread spends blocked (e.g. waiting for vsync), so video
-    // never stalls rendering. It drops frames instead if the CPU is too busy.
+    // never stalls rendering. It falls behind (dropping frames) if the CPU is too busy.
     LWP_SetThreadPriority(LWP_GetSelf(), 40);
 #endif
 
@@ -212,16 +411,13 @@ ThreadFuncRet VideoStream::ThreadMain(void* arg)
 void VideoStream::WorkerLoop()
 {
     const uint32_t numFrames = mClip->GetNumFrames();
-    const uint32_t width = mClip->GetWidth();
-    const uint32_t height = mClip->GetHeight();
     const double frameRate = mClip->GetFrameRate();
-
-    std::vector<uint8_t> record(mClip->GetMaxRecordSize());
 
     while (true)
     {
         uint32_t index = 0;
         uint32_t generation = 0;
+        int32_t slotIndex = -1;
         bool idle = false;
 
         {
@@ -241,7 +437,7 @@ void VideoStream::WorkerLoop()
             index = mNextRecord;
             generation = mGeneration;
 
-            if (mError || mFrames.size() >= kMaxQueuedFrames)
+            if (mError || mFrames.size() >= kMaxQueuedFrames || mFreeSlots.empty())
             {
                 idle = true;
             }
@@ -249,6 +445,11 @@ void VideoStream::WorkerLoop()
             {
                 mDecodedAll = true;
                 idle = true;
+            }
+            else
+            {
+                slotIndex = mFreeSlots.back();
+                mFreeSlots.pop_back();
             }
         }
 
@@ -259,35 +460,25 @@ void VideoStream::WorkerLoop()
         }
 
         const uint32_t recordSize = mClip->GetRecordSize(index);
-        bool success = recordSize >= 8 &&
-                       recordSize <= record.size() &&
-                       mClip->ReadRecord(index, record.data());
+        const bool readOk = recordSize >= 8 &&
+                            recordSize <= mRecord.size() &&
+                            mClip->ReadRecord(index, mRecord.data());
 
         uint32_t audioBytes = 0;
-        uint8_t* pixels = nullptr;
+        bool decoded = false;
 
-        if (success)
+        if (readOk)
         {
-            audioBytes = ReadU32LE(record.data());
-            const uint32_t jpegBytes = ReadU32LE(record.data() + 4);
-            success = (uint64_t(8) + audioBytes + jpegBytes) <= recordSize;
+            audioBytes = ReadU32LE(mRecord.data());
+            const uint32_t jpegBytes = ReadU32LE(mRecord.data() + 4);
 
-            if (success)
+            if ((uint64_t(8) + audioBytes + jpegBytes) <= recordSize)
             {
-                int decWidth = 0;
-                int decHeight = 0;
-                int decComps = 0;
-                pixels = stbi_load_from_memory(
-                    record.data() + 8 + audioBytes,
-                    int(jpegBytes),
-                    &decWidth,
-                    &decHeight,
-                    &decComps,
-                    4);
-
-                success = pixels != nullptr &&
-                          uint32_t(decWidth) == width &&
-                          uint32_t(decHeight) == height;
+                decoded = DecodeFrame(mRecord.data() + 8 + audioBytes, jpegBytes, mSlots[slotIndex]);
+            }
+            else
+            {
+                audioBytes = 0;
             }
         }
 
@@ -296,38 +487,135 @@ void VideoStream::WorkerLoop()
         if (generation != mGeneration)
         {
             // A seek happened while decoding; this frame belongs to the old position.
-            if (pixels != nullptr)
+            ReleaseSlotLocked(slotIndex);
+            continue;
+        }
+
+        mNextRecord = index + 1;
+        mAudio.insert(mAudio.end(), mRecord.data() + 8, mRecord.data() + 8 + audioBytes);
+
+        if (!decoded)
+        {
+            // Skip the frame but keep going; the last good frame stays on screen.
+            ReleaseSlotLocked(slotIndex);
+            mDroppedFrames++;
+
+            if (++mConsecutiveFailures >= kMaxConsecutiveFailures)
             {
-                stbi_image_free(pixels);
+                mError = true;
             }
             continue;
         }
 
-        if (!success)
-        {
-            if (pixels != nullptr)
-            {
-                stbi_image_free(pixels);
-            }
-            mError = true;
-            continue;
-        }
+        mConsecutiveFailures = 0;
 
         Frame frame;
-        frame.mPixels = pixels;
+        frame.mSlot = slotIndex;
         frame.mTime = index / frameRate;
-        mFrames.push_back(frame);
+        for (uint32_t p = 0; p < 3; ++p)
+        {
+            frame.mPlanes[p] = mSlots[slotIndex].mPlanes[p];
+        }
 
-        mAudio.insert(mAudio.end(), record.data() + 8, record.data() + 8 + audioBytes);
-        mNextRecord = index + 1;
+        mFrames.push_back(frame);
     }
 }
 
-void VideoStream::ClearQueues()
+bool VideoStream::DecodeFrame(const uint8_t* jpeg, uint32_t jpegSize, Slot& slot)
+{
+    switch (mFormat)
+    {
+    case VideoFrameFormat::GxYuv420:
+    {
+        JpegYuvPlanes planes;
+        planes.mY = slot.mPlanes[0];
+        planes.mCb = slot.mPlanes[1];
+        planes.mCr = slot.mPlanes[2];
+        planes.mGxLayout = true;
+
+        if (!mJpeg->Decode(jpeg, jpegSize, mWidth, mHeight, planes))
+        {
+            return false;
+        }
+        break;
+    }
+
+    case VideoFrameFormat::GxRgba8:
+    {
+        JpegYuvPlanes planes;
+        planes.mY = mScratchPlanes[0];
+        planes.mCb = mScratchPlanes[1];
+        planes.mCr = mScratchPlanes[2];
+
+        if (!mJpeg->Decode(jpeg, jpegSize, mWidth, mHeight, planes))
+        {
+            return false;
+        }
+
+        ConvertYuvToGxRgba8(planes.mY, planes.mCb, planes.mCr, mWidth, mHeight, slot.mPlanes[0]);
+        break;
+    }
+
+    case VideoFrameFormat::Rgba8:
+    default:
+    {
+#if PLATFORM_DOLPHIN
+        return false;
+#else
+        int decWidth = 0;
+        int decHeight = 0;
+        int decComps = 0;
+        stbi_uc* pixels = stbi_load_from_memory(jpeg, int(jpegSize), &decWidth, &decHeight, &decComps, 4);
+
+        if (pixels == nullptr)
+        {
+            return false;
+        }
+
+        const bool sizeMatches = uint32_t(decWidth) == mWidth && uint32_t(decHeight) == mHeight;
+        if (sizeMatches)
+        {
+            memcpy(slot.mPlanes[0], pixels, mWidth * mHeight * 4);
+        }
+
+        stbi_image_free(pixels);
+
+        if (!sizeMatches)
+        {
+            return false;
+        }
+#endif
+        break;
+    }
+    }
+
+#if PLATFORM_DOLPHIN
+    // The GPU reads these buffers directly.
+    for (uint32_t p = 0; p < 3; ++p)
+    {
+        if (slot.mPlanes[p] != nullptr)
+        {
+            DCFlushRange(slot.mPlanes[p], slot.mSizes[p]);
+        }
+    }
+#endif
+
+    return true;
+}
+
+void VideoStream::ReleaseSlotLocked(int32_t slot)
+{
+    if (slot >= 0)
+    {
+        mFreeSlots.push_back(slot);
+    }
+}
+
+void VideoStream::ClearQueuesLocked()
 {
     for (Frame& frame : mFrames)
     {
-        FreeFrame(frame);
+        ReleaseSlotLocked(frame.mSlot);
     }
 
     mFrames.clear();

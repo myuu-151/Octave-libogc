@@ -7,6 +7,7 @@
 #include "Log.h"
 
 #include "Audio/Audio.h"
+#include "Graphics/Graphics.h"
 #include "System/System.h"
 
 // Longest step the playback clock takes in one tick (e.g. after a hitch).
@@ -58,9 +59,15 @@ void VideoPlayer::Update(VideoClip* clip)
         return;
     }
 
+    const uint32_t dropped = mStream->TakeDroppedFrames();
+    if (dropped > 0)
+    {
+        LogWarning("Video %s: skipped %u frame(s) that failed to load or decode", clip->GetName().c_str(), dropped);
+    }
+
     if (mStream->HasError())
     {
-        LogError("Failed to decode video %s", clip->GetName().c_str());
+        LogError("Video %s: too many frames failed to load or decode; stopping", clip->GetName().c_str());
         Stop();
         return;
     }
@@ -126,12 +133,25 @@ void VideoPlayer::Update(VideoClip* clip)
     if (mStream->PopFrame(mTime, frame))
     {
         Texture* texture = mTexture.Get<Texture>();
+
+#if PLATFORM_DOLPHIN
+        // Zero copy: point the texture at the decoded frame's buffers. The frame on
+        // screen is released only once it has been replaced.
         if (texture != nullptr)
         {
-            texture->UpdatePixels(frame.mPixels);
+            GFX_SetTextureResourceData(texture, frame.mPlanes);
         }
 
-        VideoStream::FreeFrame(frame);
+        ReleaseDisplayedFrame();
+        mDisplayedFrame = frame;
+#else
+        if (texture != nullptr)
+        {
+            texture->UpdatePixels(frame.mPlanes[0]);
+        }
+
+        mStream->ReleaseFrame(frame);
+#endif
     }
 
     if (mStream->IsEndOfStream() && mTime >= clip->GetDuration())
@@ -234,6 +254,11 @@ void VideoPlayer::SetAudioEnabled(bool enabled)
     mAudioEnabled = enabled;
 }
 
+void VideoPlayer::SetUseYuv(bool useYuv)
+{
+    mUseYuv = useYuv;
+}
+
 bool VideoPlayer::Open(VideoClip* clip)
 {
     Close();
@@ -243,9 +268,24 @@ bool VideoPlayer::Open(VideoClip* clip)
         return false;
     }
 
-    mStream = new VideoStream();
-    if (!mStream->Open(clip))
+#if PLATFORM_DOLPHIN
+    const VideoFrameFormat format = mUseYuv ? VideoFrameFormat::GxYuv420 : VideoFrameFormat::GxRgba8;
+
+    if ((clip->GetWidth() % 16) != 0 || (clip->GetHeight() % 16) != 0)
     {
+        LogError("Video %s: frame size %ux%u is not a multiple of 16. Recook the clip.",
+            clip->GetName().c_str(), clip->GetWidth(), clip->GetHeight());
+        return false;
+    }
+#else
+    const VideoFrameFormat format = VideoFrameFormat::Rgba8;
+#endif
+
+    mStream = new VideoStream();
+    if (!mStream->Open(clip, format))
+    {
+        LogError("Video %s: failed to open (not enough memory for %ux%u frames?)",
+            clip->GetName().c_str(), clip->GetWidth(), clip->GetHeight());
         delete mStream;
         mStream = nullptr;
         return false;
@@ -253,7 +293,16 @@ bool VideoPlayer::Open(VideoClip* clip)
 
     Texture* texture = NewTransientAsset<Texture>();
     texture->SetName("VideoTexture");
-    texture->InitDynamic(clip->GetWidth(), clip->GetHeight());
+
+    if (format == VideoFrameFormat::GxYuv420)
+    {
+        texture->InitDynamicYuv(clip->GetWidth(), clip->GetHeight());
+    }
+    else
+    {
+        texture->InitDynamic(clip->GetWidth(), clip->GetHeight());
+    }
+
     texture->Create();
     mTexture = texture;
 
@@ -281,6 +330,17 @@ bool VideoPlayer::Open(VideoClip* clip)
 
 void VideoPlayer::Close()
 {
+#if PLATFORM_DOLPHIN
+    // Stop the texture referencing frame buffers before they are freed.
+    Texture* texture = mTexture.Get<Texture>();
+    if (texture != nullptr)
+    {
+        GFX_SetTextureResourceData(texture, nullptr);
+    }
+#endif
+
+    ReleaseDisplayedFrame();
+
     if (mStream != nullptr)
     {
         mStream->Close();
@@ -317,4 +377,14 @@ void VideoPlayer::SeekInternal(double seconds)
         AUD_FlushStream(mAudioStream);
         AUD_SetStreamPaused(mAudioStream, true);
     }
+}
+
+void VideoPlayer::ReleaseDisplayedFrame()
+{
+    if (mStream != nullptr && mDisplayedFrame.mSlot >= 0)
+    {
+        mStream->ReleaseFrame(mDisplayedFrame);
+    }
+
+    mDisplayedFrame = VideoStream::Frame();
 }

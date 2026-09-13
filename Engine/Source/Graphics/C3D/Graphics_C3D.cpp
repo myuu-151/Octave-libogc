@@ -569,6 +569,11 @@ void GFX_UpdateTextureResourcePixels(Texture* texture, const uint8_t* rgba8)
 
 }
 
+void GFX_SetTextureResourceData(Texture* texture, uint8_t* const* planes)
+{
+
+}
+
 void GFX_DestroyTextureResource(Texture* texture)
 {
     if (texture->IsDynamic())

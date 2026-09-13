@@ -28,6 +28,11 @@ static const char* sCookPresetStrings[] =
 };
 static_assert(int32_t(VideoCookPreset::Count) == 3, "Need to update cook preset string table");
 
+// Marks versioned metadata. Clips saved before versioning start their metadata with
+// the source path's length, which never equals this.
+static constexpr uint32_t kVideoClipMetaMagic = 0x564d4356; // "VCMV"
+static constexpr uint32_t kVideoClipMetaVersion = 1;
+
 bool VideoClip::HandlePropChange(Datum* datum, uint32_t index, const void* newValue)
 {
     Property* prop = static_cast<Property*>(datum);
@@ -94,6 +99,17 @@ void VideoClip::LoadStream(Stream& stream, Platform platform)
 
     mPayloadOffset = stream.ReadUint32();
 
+    uint32_t metaVersion = 0;
+    if (stream.ReadUint32() == kVideoClipMetaMagic)
+    {
+        metaVersion = stream.ReadUint32();
+    }
+    else
+    {
+        // Unversioned: that was the source path's length.
+        stream.SetPos(stream.GetPos() - sizeof(uint32_t));
+    }
+
     stream.ReadString(mSourcePath);
     mCookPreset = stream.ReadInt32();
     mCookWidth = stream.ReadInt32();
@@ -101,6 +117,13 @@ void VideoClip::LoadStream(Stream& stream, Platform platform)
     mCookFps = stream.ReadInt32();
     mCookQuality = stream.ReadInt32();
     mCookAudioChannels = stream.ReadInt32();
+
+    if (metaVersion >= 1)
+    {
+        mNativeResolution = stream.ReadBool();
+        mNativeFrameRate = stream.ReadBool();
+        mNativeSampleRate = stream.ReadBool();
+    }
 
     mWidth = stream.ReadUint32();
     mHeight = stream.ReadUint32();
@@ -160,6 +183,8 @@ void VideoClip::SaveStream(Stream& stream, Platform platform)
 
 #if EDITOR
     Stream meta;
+    meta.WriteUint32(kVideoClipMetaMagic);
+    meta.WriteUint32(kVideoClipMetaVersion);
     meta.WriteString(mSourcePath);
     meta.WriteInt32(mCookPreset);
     meta.WriteInt32(mCookWidth);
@@ -167,6 +192,9 @@ void VideoClip::SaveStream(Stream& stream, Platform platform)
     meta.WriteInt32(mCookFps);
     meta.WriteInt32(mCookQuality);
     meta.WriteInt32(mCookAudioChannels);
+    meta.WriteBool(mNativeResolution);
+    meta.WriteBool(mNativeFrameRate);
+    meta.WriteBool(mNativeSampleRate);
 
     meta.WriteUint32(mWidth);
     meta.WriteUint32(mHeight);
@@ -236,6 +264,9 @@ void VideoClip::GatherProperties(std::vector<Property>& outProps)
 
     outProps.push_back(Property(DatumType::String, "Source Path", this, &mSourcePath, 1, HandlePropChange));
     outProps.push_back(Property(DatumType::Integer, "Preset", this, &mCookPreset, 1, HandlePropChange, NULL_DATUM, int32_t(VideoCookPreset::Count), sCookPresetStrings));
+    outProps.push_back(Property(DatumType::Bool, "Native Resolution", this, &mNativeResolution, 1, HandlePropChange));
+    outProps.push_back(Property(DatumType::Bool, "Native Frame Rate", this, &mNativeFrameRate, 1, HandlePropChange));
+    outProps.push_back(Property(DatumType::Bool, "Native Sample Rate", this, &mNativeSampleRate, 1, HandlePropChange));
     outProps.push_back(Property(DatumType::Integer, "Cook Width", this, &mCookWidth, 1, HandlePropChange));
     outProps.push_back(Property(DatumType::Integer, "Cook Height", this, &mCookHeight, 1, HandlePropChange));
     outProps.push_back(Property(DatumType::Integer, "Cook FPS", this, &mCookFps, 1, HandlePropChange));
@@ -419,6 +450,140 @@ static void AppendU32LE(std::vector<uint8_t>& out, uint32_t value)
     out.push_back(uint8_t(value >> 24));
 }
 
+static std::string GetFFprobePath()
+{
+    const char* envPath = getenv("OCTAVE_FFPROBE");
+    if (envPath != nullptr && envPath[0] != '\0')
+    {
+        return envPath;
+    }
+
+#if PLATFORM_WINDOWS
+    std::string bundledPath = SYS_GetOctavePath() + "External/ffmpeg/bin/ffprobe.exe";
+#else
+    std::string bundledPath = SYS_GetOctavePath() + "External/ffmpeg/bin/ffprobe";
+#endif
+
+    if (SYS_DoesFileExist(bundledPath.c_str(), false))
+    {
+        return bundledPath;
+    }
+
+    return "ffprobe";
+}
+
+struct SourceProbe
+{
+    int32_t mWidth = 0;
+    int32_t mHeight = 0;
+    int32_t mFpsNum = 0;
+    int32_t mFpsDen = 0;
+    int32_t mSampleRate = 0;
+};
+
+// Reads the first video stream's size and frame rate and the first audio stream's
+// sample rate.
+static bool ProbeSource(const std::string& sourcePath, const std::string& prefix, SourceProbe& outProbe)
+{
+    const std::string outPath = prefix + "_probe.txt";
+    const std::string logPath = prefix + "_ffprobe.txt";
+
+    std::string cmd = "\"" + GetFFprobePath() + "\" -v error" +
+        " -show_entries stream=codec_type,width,height,r_frame_rate,sample_rate" +
+        " -of default=noprint_wrappers=1" +
+        " \"" + sourcePath + "\" > \"" + outPath + "\" 2> \"" + logPath + "\"";
+
+#if PLATFORM_WINDOWS
+    // See RunFFmpeg().
+    cmd = "\"" + cmd + "\"";
+#endif
+
+    LogDebug("[Exec] %s", cmd.c_str());
+
+    Stream output;
+    const bool ran = system(cmd.c_str()) == 0 &&
+                     SYS_DoesFileExist(outPath.c_str(), false) &&
+                     output.ReadFile(outPath.c_str(), false);
+
+    if (!ran)
+    {
+        LogFFmpegOutput(logPath);
+    }
+
+    if (SYS_DoesFileExist(outPath.c_str(), false))
+    {
+        SYS_RemoveFile(outPath.c_str());
+    }
+
+    if (!ran)
+    {
+        return false;
+    }
+
+    // Lines of key=value; each stream's fields follow its codec_type.
+    const std::string text(output.GetData(), output.GetSize());
+    std::string streamType;
+    size_t pos = 0;
+
+    while (pos < text.size())
+    {
+        size_t lineEnd = text.find('\n', pos);
+        if (lineEnd == std::string::npos)
+        {
+            lineEnd = text.size();
+        }
+
+        std::string line = text.substr(pos, lineEnd - pos);
+        pos = lineEnd + 1;
+
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+
+        const size_t equals = line.find('=');
+        if (equals == std::string::npos)
+        {
+            continue;
+        }
+
+        const std::string key = line.substr(0, equals);
+        const std::string value = line.substr(equals + 1);
+
+        if (key == "codec_type")
+        {
+            streamType = value;
+        }
+        else if (streamType == "video")
+        {
+            if (key == "width" && outProbe.mWidth == 0)
+            {
+                outProbe.mWidth = atoi(value.c_str());
+            }
+            else if (key == "height" && outProbe.mHeight == 0)
+            {
+                outProbe.mHeight = atoi(value.c_str());
+            }
+            else if (key == "r_frame_rate" && outProbe.mFpsNum == 0)
+            {
+                int num = 0;
+                int den = 0;
+                if (sscanf(value.c_str(), "%d/%d", &num, &den) == 2 && num > 0 && den > 0)
+                {
+                    outProbe.mFpsNum = num;
+                    outProbe.mFpsDen = den;
+                }
+            }
+        }
+        else if (streamType == "audio" && key == "sample_rate" && outProbe.mSampleRate == 0)
+        {
+            outProbe.mSampleRate = atoi(value.c_str());
+        }
+    }
+
+    return outProbe.mWidth > 0 || outProbe.mSampleRate > 0;
+}
+
 bool VideoClip::Cook()
 {
     if (mSourcePath.empty() || !SYS_DoesFileExist(mSourcePath.c_str(), false))
@@ -427,10 +592,11 @@ bool VideoClip::Cook()
         return false;
     }
 
-    // Frame dimensions must be multiples of 4: GX RGBA8 textures are laid out in 4x4 blocks.
-    // Height -4 tells ffmpeg to keep the aspect ratio and round to a multiple of 4.
-    int32_t width = glm::clamp(mCookWidth, 16, 1024) & ~3;
-    int32_t height = (mCookHeight > 0) ? (glm::clamp(mCookHeight, 16, 1024) & ~3) : -4;
+    // Frame dimensions must be multiples of 16 (whole JPEG macroblocks), so the
+    // GameCube decoder can write 8x8 blocks straight into texture memory. Height -16
+    // tells ffmpeg to keep the aspect ratio and round to a multiple of 16.
+    int32_t width = glm::clamp(mCookWidth, 16, 1024) & ~15;
+    int32_t height = (mCookHeight > 0) ? (glm::clamp(mCookHeight, 16, 1024) & ~15) : -16;
     uint32_t fpsMilli = uint32_t(glm::clamp(mCookFps, 1, 60)) * 1000;
     std::string fpsFilter = std::to_string(fpsMilli / 1000);
 
@@ -453,9 +619,9 @@ bool VideoClip::Cook()
     }
 
     const int32_t quality = glm::clamp(mCookQuality, 2, 31);
-    // Fixed at 44100 Hz to match the rate the rest of the audio pipeline (Vorbis) supports.
-    const int32_t audioRate = 44100;
     const int32_t audioChannels = (mCookAudioChannels == 1) ? 1 : 2;
+    // 44100 Hz matches the rate the rest of the audio pipeline (Vorbis) supports.
+    int32_t audioRate = 44100;
 
     std::string tempDir = GetEngineState()->mProjectDirectory + "Intermediate";
     SYS_CreateDirectory(tempDir.c_str());
@@ -465,6 +631,44 @@ bool VideoClip::Cook()
     const std::string prefix = tempDir + "/" + mName;
     const std::string audioPath = prefix + ".pcm";
     const std::string logPath = prefix + "_ffmpeg.txt";
+
+    if (mNativeResolution || mNativeFrameRate || mNativeSampleRate)
+    {
+        SourceProbe probe;
+
+        if (!ProbeSource(mSourcePath, prefix, probe))
+        {
+            LogWarning("VideoClip %s: couldn't read the source with ffprobe; native settings ignored.", mName.c_str());
+        }
+        else
+        {
+            if (mNativeResolution && probe.mWidth > 0 && probe.mHeight > 0)
+            {
+                // GameCube textures are at most 1024x1024.
+                const float scale = glm::min(1.0f, glm::min(1024.0f / probe.mWidth, 1024.0f / probe.mHeight));
+                width = glm::max(int32_t(probe.mWidth * scale) & ~15, 16);
+                height = glm::max(int32_t(probe.mHeight * scale) & ~15, 16);
+            }
+
+            if (mNativeFrameRate && probe.mFpsNum > 0 && probe.mFpsDen > 0)
+            {
+                if (probe.mFpsNum > 60 * probe.mFpsDen)
+                {
+                    LogWarning("VideoClip %s: source is %d/%d fps; capping at 60.", mName.c_str(), probe.mFpsNum, probe.mFpsDen);
+                    probe.mFpsNum = 60;
+                    probe.mFpsDen = 1;
+                }
+
+                fpsMilli = uint32_t(1000.0 * probe.mFpsNum / probe.mFpsDen + 0.5);
+                fpsFilter = std::to_string(probe.mFpsNum) + "/" + std::to_string(probe.mFpsDen);
+            }
+
+            if (mNativeSampleRate && probe.mSampleRate > 0)
+            {
+                audioRate = glm::clamp(probe.mSampleRate, 8000, 48000);
+            }
+        }
+    }
 
     // Clear out anything left behind by a previous cook of this clip.
     for (uint32_t i = 1; SYS_DoesFileExist(GetFramePath(prefix, i).c_str(), false); ++i)

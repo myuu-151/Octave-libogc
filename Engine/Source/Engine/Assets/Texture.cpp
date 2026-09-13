@@ -606,9 +606,22 @@ bool Texture::IsDynamic() const
     return mDynamic;
 }
 
+void Texture::InitDynamicYuv(uint32_t width, uint32_t height)
+{
+    OCT_ASSERT((width % 2) == 0 && (height % 2) == 0);
+
+    InitDynamic(width, height);
+    mYuv = true;
+}
+
+bool Texture::IsYuv() const
+{
+    return mYuv;
+}
+
 void Texture::UpdatePixels(const uint8_t* rgba8)
 {
-    if (mDynamic && IsLoaded() && rgba8 != nullptr)
+    if (mDynamic && !mYuv && IsLoaded() && rgba8 != nullptr)
     {
         GFX_UpdateTextureResourcePixels(this, rgba8);
     }
