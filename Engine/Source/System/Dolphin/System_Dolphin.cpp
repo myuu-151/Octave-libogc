@@ -167,13 +167,13 @@ enum { ISO_NONE = 0, ISO_SD, ISO_DVD };
 static int       sIsoMode = ISO_NONE;
 
 // DVD-transport test flag (default 0 = normal SD-first auto-detect). Set to 1 to FORCE
-// the physical-disc (DVD) transport, skipping SD detection, and enable SYS_Report tracing
-// of the mount. Used to validate the DI reader by booting the .iso as a disc in Dolphin
-// (with no SD card): the game reads its assets off the emulated drive via our DI reader,
-// exercising the exact real-disc path. VERIFIED in Dolphin (mount OK, FST parsed, assets
-// stream). NOTE: only enable for a disc boot (Dolphin or real disc) -- a value of 1 will
-// NOT run on an SD rig (no disc), and the SYS_Report tracing clobbers OS globals on real
-// hardware (fine in Dolphin, its intended debug target). Leave 0 for shipping builds.
+// the physical-disc (DVD) transport, skipping SD detection, and enable mount tracing via
+// the clobber-free IsoLog file logger (-> /octiso.log; no-op unless IsoLog_local.h is
+// present). Used to validate the DI reader by booting the .iso as a disc in Dolphin (no
+// SD card): the game reads its assets off the emulated drive via our DI reader, exercising
+// the exact real-disc path. VERIFIED in Dolphin (mount OK, FST parsed, assets stream).
+// NOTE: value of 1 will NOT run on an SD rig (no disc). Tracing goes to the SD file logger
+// (no SYS_Report), so it no longer clobbers OS globals. Leave 0 for shipping builds.
 #define OCT_FORCE_DVD 0
 
 static bool IsoMounted() { return sIsoMode != ISO_NONE; }
@@ -212,12 +212,12 @@ static bool IsoParseFst()
     uint8_t hdr[0x440];
     if (!IsoReadRaw(0, hdr, sizeof(hdr))) {
 #if OCT_FORCE_DVD
-        SYS_Report("ISO/DVD: boot.bin read FAILED (transport read returned false)\n");
+        IsoLog("ISO/DVD: boot.bin read FAILED (transport read returned false)\n");
 #endif
         return false;
     }
 #if OCT_FORCE_DVD
-    SYS_Report("ISO/DVD: boot.bin read OK, magic@0x1C=%08X (want C2339F3D), first8=%08X %08X\n",
+    IsoLog("ISO/DVD: boot.bin read OK, magic@0x1C=%08X (want C2339F3D), first8=%08X %08X\n",
                IsoRead32(hdr + 0x1C), IsoRead32(hdr + 0), IsoRead32(hdr + 4));
 #endif
     if (IsoRead32(hdr + 0x1C) != 0xC2339F3D) return false;  // GC disc magic
@@ -225,21 +225,21 @@ static bool IsoParseFst()
     uint32_t fstOff  = IsoRead32(hdr + 0x424);
     uint32_t fstSize = IsoRead32(hdr + 0x428);
 #if OCT_FORCE_DVD
-    SYS_Report("ISO/DVD: fstOff=%08X fstSize=%08X\n", fstOff, fstSize);
+    IsoLog("ISO/DVD: fstOff=%08X fstSize=%08X\n", fstOff, fstSize);
 #endif
     if (fstOff == 0 || fstSize < 12) return false;
 
     std::vector<uint8_t> fst(fstSize);
     if (!IsoReadRaw(fstOff, fst.data(), fstSize)) {
 #if OCT_FORCE_DVD
-        SYS_Report("ISO/DVD: FST read FAILED at off=%08X size=%08X\n", fstOff, fstSize);
+        IsoLog("ISO/DVD: FST read FAILED at off=%08X size=%08X\n", fstOff, fstSize);
 #endif
         return false;
     }
 
     uint32_t numEntries = IsoRead32(&fst[8]);            // root entry length = entry count
 #if OCT_FORCE_DVD
-    SYS_Report("ISO/DVD: numEntries=%u\n", numEntries);
+    IsoLog("ISO/DVD: numEntries=%u\n", numEntries);
 #endif
     if ((uint64_t)numEntries * 12 > fstSize || numEntries == 0) return false;
     const char* strTable = (const char*)&fst[numEntries * 12];
@@ -287,7 +287,7 @@ static bool IsoParseFst()
     int32_t sample = 0;
     for (auto& kv : sIsoFiles) { IsoLog("  fst: %s (%u bytes)", kv.first.c_str(), kv.second.size); if (++sample >= 8) break; }
 #if OCT_FORCE_DVD
-    SYS_Report("ISO/DVD: MOUNTED OK, %u files in FST\n", (uint32_t)sIsoFiles.size());
+    IsoLog("ISO/DVD: MOUNTED OK, %u files in FST\n", (uint32_t)sIsoFiles.size());
 #endif
     return true;
 }
@@ -318,7 +318,7 @@ static bool IsoOpenDVD()
 {
     sIsoMode = ISO_DVD;
 #if OCT_FORCE_DVD
-    SYS_Report("ISO/DVD: IsoOpenDVD() -- forcing physical-disc transport, parsing FST via DI\n");
+    IsoLog("ISO/DVD: IsoOpenDVD() -- forcing physical-disc transport, parsing FST via DI\n");
 #endif
 
     // Try reading straight away -- after a Swiss/IPL disc boot the drive is already
