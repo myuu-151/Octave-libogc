@@ -78,16 +78,25 @@ static bool DiReadOnce(uint32_t alignedOff, void* dst, uint32_t alignedLen)
     return true;
 }
 
+static void DiSpinUp();   // defined below: unlock + spin the drive (up)
+
 // Read with retries. Burned media often has marginal sectors that read on a second try,
-// so re-attempt a few times, clearing the drive error between attempts.
+// so re-attempt a few times, clearing the drive error between attempts. If the whole
+// batch fails, re-assert the drive once (DiSpinUp) and try again -- covers a drive that
+// idled/spun down mid-session. That's rare on GameCube (the drive stays spinning for the
+// whole session), but this makes it self-heal instead of failing the asset read.
 static bool DiReadSectors(uint32_t alignedOff, void* dst, uint32_t alignedLen)
 {
     if (((uintptr_t)dst & 31) || (alignedOff & 31) || (alignedLen & 31)) return false;
 
-    for (int attempt = 0; attempt < 5; ++attempt)
+    for (int pass = 0; pass < 2; ++pass)
     {
-        if (DiReadOnce(alignedOff, dst, alignedLen)) return true;
-        DiGetError();   // read/clear the latched error, then retry
+        for (int attempt = 0; attempt < 5; ++attempt)
+        {
+            if (DiReadOnce(alignedOff, dst, alignedLen)) return true;
+            DiGetError();   // read/clear the latched error, then retry
+        }
+        if (pass == 0) DiSpinUp();   // reads failed -> drive may have napped; wake it and retry
     }
     return false;
 }
@@ -122,12 +131,11 @@ bool OctDvdRead(uint32_t offset, void* buf, uint32_t len)
 // hard reset (that pokes the system reset register 0xCC003024 -- a wrong value reboots
 // the console, and Swiss already hard-resets at boot); the per-drive firmware patches
 // that enable burned-media reads are likewise Swiss's job at boot and persist into here.
-void OctDvdMount()
+// Called at mount time (via OctDvdMount) and again by DiReadSectors if reads start
+// failing mid-session (a napped drive). Safe to call repeatedly -- it just re-issues the
+// unlock/spin commands; the unlock and firmware patch aren't lost by a spin-down.
+static void DiSpinUp()
 {
-    static bool mounted = false;
-    if (mounted) return;
-    mounted = true;
-
     // Unlock (MATSUSHITA / "DVD-GAME" magic).
     DI_SR |= 0x14; DI_REG(0x04) = 0;
     DI_CMDBUF0 = 0xFF014D41; DI_CMDBUF1 = 0x54534849; DI_CMDBUF2 = 0x54410200; DI_CR = 0x1; DiWait();
@@ -156,6 +164,16 @@ void OctDvdMount()
     DI_CMDBUF0 = 0xA8000040; DI_CMDBUF1 = 0; DI_CMDBUF2 = 0x20;
     DI_MAR = (uint32_t)((uintptr_t)idbuf) & 0x1FFFFFFF; DI_LENGTH = 0x20;
     DI_CR = 0x3; DiWait();
+}
+
+// Mount-time entry point: bring the drive up once. (The bring-up itself, DiSpinUp, is
+// also re-invoked by DiReadSectors if the drive stops responding mid-session.)
+void OctDvdMount()
+{
+    static bool mounted = false;
+    if (mounted) return;
+    mounted = true;
+    DiSpinUp();
 }
 
 #endif // PLATFORM_DOLPHIN
