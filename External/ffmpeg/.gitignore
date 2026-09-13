@@ -1,0 +1,4 @@
+# ffmpeg binaries are too large for git (ffmpeg.exe is ~130 MB).
+# Place an LGPL build here, e.g. bin/ffmpeg.exe from
+# https://github.com/BtbN/FFmpeg-Builds/releases (win64-lgpl), or set OCTAVE_FFMPEG.
+bin/

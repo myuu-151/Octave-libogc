@@ -178,6 +178,33 @@ void SYS_ReleaseFileData(char* data)
     }
 }
 
+bool SYS_ReadFileRange(const char* path, bool isAsset, uint32_t offset, uint32_t size, char* outData)
+{
+    FILE* file = nullptr;
+
+    if (isAsset)
+    {
+        std::string romfsPath = std::string("romfs:/") + path;
+        file = fopen(romfsPath.c_str(), "rb");
+    }
+
+    if (file == nullptr)
+    {
+        file = fopen(path, "rb");
+    }
+
+    if (file == nullptr)
+    {
+        return false;
+    }
+
+    bool success = (fseek(file, long(offset), SEEK_SET) == 0) &&
+                   (fread(outData, 1, size, file) == size);
+
+    fclose(file);
+    return success;
+}
+
 std::string SYS_GetCurrentDirectoryPath()
 {
     char path[MAX_PATH_SIZE] = {};

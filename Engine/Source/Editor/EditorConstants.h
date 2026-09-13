@@ -16,3 +16,4 @@
 #define BASIC_TEXT_MESH "Text Mesh"
 #define BASIC_INSTANCED_MESH "Instanced Mesh"
 #define BASIC_SPLINE "Spline"
+#define BASIC_VIDEO "Video"

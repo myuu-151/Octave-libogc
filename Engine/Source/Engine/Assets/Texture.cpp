@@ -578,6 +578,42 @@ void Texture::Init(uint32_t width, uint32_t height, uint8_t* data)
     memcpy(mPixels.data(), data, imageSize);
 }
 
+void Texture::InitDynamic(uint32_t width, uint32_t height)
+{
+    OCT_ASSERT(width > 0);
+    OCT_ASSERT(height > 0);
+    OCT_ASSERT(!IsLoaded());
+
+    mWidth = width;
+    mHeight = height;
+    mFormat = PixelFormat::RGBA8;
+    mFilterType = FilterType::Linear;
+    mWrapMode = WrapMode::Clamp;
+    mMipmapped = false;
+    mMipLevels = 1;
+    mDynamic = true;
+
+    // Start opaque black.
+    mPixels.assign(width * height * RGBA8_SIZE, 0);
+    for (uint32_t i = 3; i < mPixels.size(); i += RGBA8_SIZE)
+    {
+        mPixels[i] = 0xff;
+    }
+}
+
+bool Texture::IsDynamic() const
+{
+    return mDynamic;
+}
+
+void Texture::UpdatePixels(const uint8_t* rgba8)
+{
+    if (mDynamic && IsLoaded() && rgba8 != nullptr)
+    {
+        GFX_UpdateTextureResourcePixels(this, rgba8);
+    }
+}
+
 void Texture::SetMipmapped(bool mipmapped)
 {
     mMipmapped = mipmapped;

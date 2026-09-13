@@ -16,6 +16,9 @@ void SYS_Update();
 bool SYS_DoesFileExist(const char* path, bool isAsset);
 void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*& outData, uint32_t& outSize);
 void SYS_ReleaseFileData(char* data);
+// Reads `size` bytes at `offset` of a file into outData, which must hold `size` bytes.
+// Lets large assets (e.g. video) be streamed without loading the whole file.
+bool SYS_ReadFileRange(const char* path, bool isAsset, uint32_t offset, uint32_t size, char* outData);
 std::string SYS_GetExecutablePath();
 std::string SYS_GetOctavePath();
 // Register the running editor as the handler for .octp project files, so

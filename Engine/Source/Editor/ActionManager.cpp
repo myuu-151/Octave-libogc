@@ -31,6 +31,7 @@
 #include "Assets/SoundWave.h"
 #include "Assets/MaterialLite.h"
 #include "Assets/Font.h"
+#include "Assets/VideoClip.h"
 #include "AssetDir.h"
 #include "EmbeddedFile.h"
 #include "Utilities.h"
@@ -50,6 +51,7 @@
 #include "Nodes/3D/Capsule3d.h"
 #include "Nodes/3D/Particle3d.h"
 #include "Nodes/3D/Audio3d.h"
+#include "Nodes/3D/Video3d.h"
 #include "Nodes/3D/ShadowMesh3d.h"
 #include "Nodes/3D/InstancedMesh3d.h"
 #include "Nodes/3D/TextMesh3d.h"
@@ -1304,6 +1306,18 @@ Node* ActionManager::SpawnBasicNode(const std::string& name, Node* parent, Asset
 
         spawnedNode = audioNode;
     }
+    else if (name == BASIC_VIDEO)
+    {
+        Video3D* videoNode = EXE_SpawnNode(Video3D::GetStaticType())->As<Video3D>();
+
+        if (srcAsset != nullptr &&
+            srcAsset->GetType() == VideoClip::GetStaticType())
+        {
+            videoNode->SetVideoClip(static_cast<VideoClip*>(srcAsset));
+        }
+
+        spawnedNode = videoNode;
+    }
     else if (name == BASIC_SCENE)
     {
         Scene* scene = nullptr;
@@ -2342,6 +2356,24 @@ Asset* ActionManager::ImportAsset(const std::string& path)
     else if (extension == ".ttf" || extension == ".xml")
     {
         importTypes.push_back(Font::GetStaticType());
+    }
+    else
+    {
+        std::string lowerExt = extension;
+        for (char& c : lowerExt)
+        {
+            c = (char)tolower((unsigned char)c);
+        }
+
+        if (lowerExt == ".mp4" ||
+            lowerExt == ".mov" ||
+            lowerExt == ".webm" ||
+            lowerExt == ".mkv" ||
+            lowerExt == ".avi" ||
+            lowerExt == ".m4v")
+        {
+            importTypes.push_back(VideoClip::GetStaticType());
+        }
     }
 
     if (importTypes.size() == 0)

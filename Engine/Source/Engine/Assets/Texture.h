@@ -31,6 +31,12 @@ public:
 
     void Init(uint32_t width, uint32_t height, uint8_t* data);
 
+    // Dynamic textures hold RGBA8 pixels that can be replaced every frame with
+    // UpdatePixels() (e.g. video). Call InitDynamic() before Create().
+    void InitDynamic(uint32_t width, uint32_t height);
+    bool IsDynamic() const;
+    void UpdatePixels(const uint8_t* rgba8);
+
     void SetMipmapped(bool mipmapped);
     bool IsMipmapped() const;
     bool IsRenderTarget() const;
@@ -67,6 +73,7 @@ protected:
     bool mSrgb;
     bool mForceHighQuality;
     uint8_t mLowQualityDownsampleFactor;
+    bool mDynamic = false;
 
     // This pixel array is used as an intermediate storage between LoadStream() and Create()
     // It is cleared and shrunk within Create() except when compiled for EDITOR

@@ -518,6 +518,37 @@ void SYS_ReleaseFileData(char* data)
     }
 }
 
+bool SYS_ReadFileRange(const char* path, bool isAsset, uint32_t offset, uint32_t size, char* outData)
+{
+    bool success = false;
+
+    if (isAsset)
+    {
+        AAssetManager* assetManager = GetEngineState()->mSystem.mState->activity->assetManager;
+        AAsset* asset = AAssetManager_open(assetManager, path, AASSET_MODE_RANDOM);
+
+        if (asset != nullptr)
+        {
+            success = (AAsset_seek(asset, off_t(offset), SEEK_SET) == off_t(offset)) &&
+                      (AAsset_read(asset, outData, size) == int(size));
+            AAsset_close(asset);
+        }
+    }
+    else
+    {
+        FILE* file = fopen(path, "rb");
+
+        if (file != nullptr)
+        {
+            success = (fseek(file, long(offset), SEEK_SET) == 0) &&
+                      (fread(outData, 1, size, file) == size);
+            fclose(file);
+        }
+    }
+
+    return success;
+}
+
 std::string SYS_GetCurrentDirectoryPath()
 {
     char path[MAX_PATH_SIZE] = {};

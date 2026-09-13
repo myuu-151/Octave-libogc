@@ -73,6 +73,8 @@ void GFX_EndGpuTimestamp(const char* name);
 // Texture
 void GFX_CreateTextureResource(Texture* texture, std::vector<uint8_t>& data);
 void GFX_DestroyTextureResource(Texture* texture);
+// Replaces the pixels of a dynamic texture (see Texture::InitDynamic) with width * height RGBA8.
+void GFX_UpdateTextureResourcePixels(Texture* texture, const uint8_t* rgba8);
 
 // Material
 void GFX_CreateMaterialResource(Material* material);

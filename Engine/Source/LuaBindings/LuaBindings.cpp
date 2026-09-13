@@ -36,6 +36,7 @@
 #include "LuaBindings/InstancedMesh3d_Lua.h"
 #include "LuaBindings/TextMesh3d_Lua.h"
 #include "LuaBindings/Sphere3d_Lua.h"
+#include "LuaBindings/Video3d_Lua.h"
 #include "LuaBindings/Asset_Lua.h"
 #include "LuaBindings/Scene_Lua.h"
 #include "LuaBindings/Material_Lua.h"
@@ -53,6 +54,7 @@
 #include "LuaBindings/Quad_Lua.h"
 #include "LuaBindings/Text_Lua.h"
 #include "LuaBindings/Button_Lua.h"
+#include "LuaBindings/VideoQuad_Lua.h"
 #include "LuaBindings/Canvas_Lua.h"
 #include "LuaBindings/Poly_Lua.h"
 #include "LuaBindings/PolyRect_Lua.h"
@@ -106,6 +108,7 @@ void BindLuaInterface()
     InstancedMesh3D_Lua::Bind();
     TextMesh3D_Lua::Bind();
     Sphere3D_Lua::Bind();
+    Video3D_Lua::Bind();
 
     // Assets need to be bound in hierarchy order.
     Asset_Lua::Bind();
@@ -126,6 +129,7 @@ void BindLuaInterface()
     Quad_Lua::Bind();
     Text_Lua::Bind();
     Button_Lua::Bind();
+    VideoQuad_Lua::Bind();
     Canvas_Lua::Bind();
     Poly_Lua::Bind();
     PolyRect_Lua::Bind();

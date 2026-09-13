@@ -35,6 +35,17 @@ uint8_t* AUD_AllocWaveBuffer(uint32_t size);
 void AUD_FreeWaveBuffer(void* buffer);
 void AUD_ProcessWaveBuffer(SoundWave* soundWave);
 
+// Streaming PCM voices: push audio that is produced at runtime (e.g. a video's
+// soundtrack). Data is 16-bit signed little-endian interleaved PCM. Streams start
+// paused. AUD_OpenStream() returns 0 if no stream could be opened.
+uint32_t AUD_OpenStream(uint32_t sampleRate, uint32_t numChannels);
+void AUD_CloseStream(uint32_t streamId);
+void AUD_QueueStreamData(uint32_t streamId, const uint8_t* data, uint32_t size);
+uint64_t AUD_GetStreamPlayedFrames(uint32_t streamId);   // since open / last flush
+void AUD_SetStreamPaused(uint32_t streamId, bool paused);
+void AUD_SetStreamVolume(uint32_t streamId, float volume);
+void AUD_FlushStream(uint32_t streamId);
+
 // Platform Independent
 void AUD_EncodeVorbis(Stream& inStream, Stream& outStream, PcmFormat format);
 void AUD_DecodeVorbis(Stream& inStream, Stream& outStream, PcmFormat format);

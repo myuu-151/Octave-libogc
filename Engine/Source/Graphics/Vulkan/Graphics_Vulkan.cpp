@@ -3,6 +3,7 @@
 #include "Graphics/Graphics.h"
 #include "Graphics/Vulkan/VulkanContext.h"
 #include "Graphics/Vulkan/VulkanUtils.h"
+#include "Graphics/Vulkan/Image.h"
 
 #include "Maths.h"
 #include "Engine.h"
@@ -273,6 +274,17 @@ void GFX_DestroyTextureResource(Texture* texture)
 {
     if (IsHeadless()) return;
     DestroyTextureResource(texture);
+}
+
+void GFX_UpdateTextureResourcePixels(Texture* texture, const uint8_t* rgba8)
+{
+    if (IsHeadless()) return;
+
+    TextureResource* resource = texture->GetResource();
+    if (resource->mImage != nullptr && rgba8 != nullptr)
+    {
+        resource->mImage->Update(rgba8);
+    }
 }
 
 void GFX_CreateMaterialResource(Material* material)

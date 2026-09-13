@@ -121,6 +121,10 @@ public:
     void LoadEmbedded(const EmbeddedFile* embeddedAsset, AsyncLoadRequest* request = nullptr);
     void SaveFile(const char* path, Platform platform);
 
+    // Bytes LoadFile() reads from the start of the file (0 = the whole file). Assets
+    // that stream bulk data from their file at runtime return their metadata size.
+    virtual int32_t GetFileReadLimit(const char* path);
+
     virtual void LoadStream(Stream& stream, Platform platform);
     virtual void SaveStream(Stream& stream, Platform platform);
     virtual bool Import(const std::string& path, ImportOptions* options = nullptr);

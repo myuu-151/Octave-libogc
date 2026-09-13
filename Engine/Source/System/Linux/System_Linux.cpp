@@ -582,6 +582,21 @@ void SYS_ReleaseFileData(char* data)
     }
 }
 
+bool SYS_ReadFileRange(const char* path, bool isAsset, uint32_t offset, uint32_t size, char* outData)
+{
+    FILE* file = fopen(path, "rb");
+    if (file == nullptr)
+    {
+        return false;
+    }
+
+    bool success = (fseek(file, long(offset), SEEK_SET) == 0) &&
+                   (fread(outData, 1, size, file) == size);
+
+    fclose(file);
+    return success;
+}
+
 std::string SYS_GetOctavePath()
 {
     std::string octaveDirectory = SYS_GetCurrentDirectoryPath();

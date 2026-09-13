@@ -158,6 +158,7 @@ void ForceLinkage()
     FORCE_LINK_CALL(InstancedMesh3D);
     FORCE_LINK_CALL(Spline3D);
     FORCE_LINK_CALL(NavMesh3D);
+    FORCE_LINK_CALL(Video3D);
 
     // Asset Types
     FORCE_LINK_CALL(Scene);
@@ -172,6 +173,7 @@ void ForceLinkage()
     FORCE_LINK_CALL(StaticMesh);
     FORCE_LINK_CALL(Texture);
     FORCE_LINK_CALL(Font);
+    FORCE_LINK_CALL(VideoClip);
 
     // Widget Types
     FORCE_LINK_CALL(ArrayWidget);
@@ -184,6 +186,7 @@ void ForceLinkage()
     FORCE_LINK_CALL(Text);
     FORCE_LINK_CALL(Widget);
     FORCE_LINK_CALL(Button);
+    FORCE_LINK_CALL(VideoQuad);
 }
 
 Platform StringToPlatform(const char* str)

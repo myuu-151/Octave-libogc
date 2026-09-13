@@ -374,6 +374,35 @@ void GFX_CreateTextureResource(Texture* texture, std::vector<uint8_t>& data)
 
     GX_InvalidateTexAll();
 
+    if (texture->IsDynamic())
+    {
+        // Raw GX_TF_RGBA8 texel memory that GFX_UpdateTextureResourcePixels() rewrites
+        // in place. Clamp wrapping, since the dimensions needn't be powers of two.
+        const uint32_t width = texture->GetWidth();
+        const uint32_t height = texture->GetHeight();
+        resource->mDynamicSize = ((width + 3) & ~3u) * ((height + 3) & ~3u) * 4;
+        resource->mDynamicData = SYS_AlignedMalloc(resource->mDynamicSize, 32);
+
+        if (resource->mDynamicData == nullptr)
+        {
+            LogError("Failed to allocate %u bytes for dynamic texture", resource->mDynamicSize);
+            resource->mDynamicSize = 0;
+            return;
+        }
+
+        memset(resource->mDynamicData, 0, resource->mDynamicSize);
+
+        uint8_t filter = (texture->GetFilterType() == FilterType::Nearest) ? GX_NEAR : GX_LINEAR;
+        GX_InitTexObj(&resource->mGxTexObj, resource->mDynamicData, width, height, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+        GX_InitTexObjFilterMode(&resource->mGxTexObj, filter, filter);
+
+        if (data.size() == width * height * 4)
+        {
+            GFX_UpdateTextureResourcePixels(texture, data.data());
+        }
+        return;
+    }
+
     resource->mTplData = SYS_AlignedMalloc((uint32_t)data.size(), 32);
     memcpy(resource->mTplData, data.data(), data.size());
 
@@ -414,6 +443,19 @@ void GFX_DestroyTextureResource(Texture* texture)
 {
     TextureResource* resource = texture->GetResource();
 
+    if (texture->IsDynamic())
+    {
+        if (resource->mDynamicData != nullptr)
+        {
+            SYS_AlignedFree(resource->mDynamicData);
+            resource->mDynamicData = nullptr;
+        }
+
+        resource->mDynamicSize = 0;
+        resource->mGxTexObj = { };
+        return;
+    }
+
     TPL_CloseTPLFile(&resource->mTplFile);
 
     if (resource->mTplData != nullptr)
@@ -423,6 +465,55 @@ void GFX_DestroyTextureResource(Texture* texture)
     }
 
     resource->mGxTexObj = { };
+}
+
+void GFX_UpdateTextureResourcePixels(Texture* texture, const uint8_t* rgba8)
+{
+    TextureResource* resource = texture->GetResource();
+    if (resource->mDynamicData == nullptr || rgba8 == nullptr)
+    {
+        return;
+    }
+
+    // GX_TF_RGBA8 stores texels in 4x4 blocks: 16 (A,R) byte pairs, then 16 (G,B)
+    // pairs. Texels past the right/bottom edge repeat the edge pixel.
+    const uint32_t width = texture->GetWidth();
+    const uint32_t height = texture->GetHeight();
+    const uint32_t blocksWide = (width + 3) / 4;
+    const uint32_t blocksHigh = (height + 3) / 4;
+    uint8_t* block = (uint8_t*)resource->mDynamicData;
+
+    for (uint32_t by = 0; by < blocksHigh; ++by)
+    {
+        for (uint32_t bx = 0; bx < blocksWide; ++bx)
+        {
+            uint8_t* arPlane = block;
+            uint8_t* gbPlane = block + 32;
+
+            for (uint32_t py = 0; py < 4; ++py)
+            {
+                const uint32_t y = glm::min(by * 4 + py, height - 1);
+                const uint8_t* srcRow = rgba8 + y * width * 4;
+
+                for (uint32_t px = 0; px < 4; ++px)
+                {
+                    const uint32_t x = glm::min(bx * 4 + px, width - 1);
+                    const uint8_t* src = srcRow + x * 4;
+                    const uint32_t i = (py * 4 + px) * 2;
+
+                    arPlane[i] = src[3];
+                    arPlane[i + 1] = src[0];
+                    gbPlane[i] = src[1];
+                    gbPlane[i + 1] = src[2];
+                }
+            }
+
+            block += 64;
+        }
+    }
+
+    DCFlushRange(resource->mDynamicData, resource->mDynamicSize);
+    GX_InvalidateTexAll();
 }
 
 // Material

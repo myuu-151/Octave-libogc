@@ -179,7 +179,7 @@ void Asset::LoadFile(const char* path, AsyncLoadRequest* request)
 
     Stream stream;
     stream.SetAsyncRequest(request);
-    stream.ReadFile(path, true);
+    stream.ReadFile(path, true, GetFileReadLimit(path));
     LoadStream(stream, GetPlatform());
 
     // Only "finish" the load if not async.
@@ -202,6 +202,11 @@ void Asset::SaveFile(const char* path, Platform platform)
         ClearDirtyFlag();
     }
 #endif
+}
+
+int32_t Asset::GetFileReadLimit(const char* path)
+{
+    return 0;
 }
 
 void Asset::LoadEmbedded(const EmbeddedFile* embeddedAsset, AsyncLoadRequest* request)

@@ -512,4 +512,13 @@ void AUD_ProcessWaveBuffer(SoundWave* soundWave)
     }
 }
 
+// Streaming voices are not implemented on Android yet.
+uint32_t AUD_OpenStream(uint32_t sampleRate, uint32_t numChannels) { return 0; }
+void AUD_CloseStream(uint32_t streamId) {}
+void AUD_QueueStreamData(uint32_t streamId, const uint8_t* data, uint32_t size) {}
+uint64_t AUD_GetStreamPlayedFrames(uint32_t streamId) { return 0; }
+void AUD_SetStreamPaused(uint32_t streamId, bool paused) {}
+void AUD_SetStreamVolume(uint32_t streamId, float volume) {}
+void AUD_FlushStream(uint32_t streamId) {}
+
 #endif

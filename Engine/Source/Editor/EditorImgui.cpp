@@ -2239,6 +2239,8 @@ static void DrawSpawnBasic3dMenu(Node* node, bool setFocusPos)
         am->SpawnBasicNode(BASIC_PARTICLE, node, selAsset, setFocusPos, spawnPos);
     if (ImGui::MenuItem(BASIC_AUDIO))
         am->SpawnBasicNode(BASIC_AUDIO, node, selAsset, setFocusPos, spawnPos);
+    if (ImGui::MenuItem(BASIC_VIDEO))
+        am->SpawnBasicNode(BASIC_VIDEO, node, selAsset, setFocusPos, spawnPos);
     if (ImGui::MenuItem(BASIC_BOX))
         am->SpawnBasicNode(BASIC_BOX, node, selAsset, setFocusPos, spawnPos);
     if (ImGui::MenuItem(BASIC_SPHERE))
@@ -2273,6 +2275,8 @@ static void DrawSpawnBasicWidgetMenu(Node* node)
         widgetTypeName = "Text";
     if (ImGui::MenuItem("Button"))
         widgetTypeName = "Button";
+    if (ImGui::MenuItem("Video"))
+        widgetTypeName = "VideoQuad";
 
     if (widgetTypeName != nullptr)
     {

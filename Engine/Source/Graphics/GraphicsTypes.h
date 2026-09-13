@@ -129,6 +129,8 @@ struct TextureResource
     GXTexObj mGxTexObj = {};
     TPLFile mTplFile = {};
     void* mTplData = nullptr;
+    void* mDynamicData = nullptr;   // GX_TF_RGBA8 texels of a dynamic texture
+    uint32_t mDynamicSize = 0;
 #elif API_C3D
     C3D_Tex mTex = {};
     void* mT3dsData = nullptr;

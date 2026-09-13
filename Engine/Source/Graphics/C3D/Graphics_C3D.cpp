@@ -510,6 +510,12 @@ void GFX_CreateTextureResource(Texture* texture, std::vector<uint8_t>& data)
 {
     TextureResource* resource = texture->GetResource();
 
+    if (texture->IsDynamic())
+    {
+        LogWarning("Dynamic textures are not supported on 3DS");
+        return;
+    }
+
     resource->mT3dsData = SYS_AlignedMalloc((uint32_t)data.size(), 32);
     memcpy(resource->mT3dsData, data.data(), data.size());
 
@@ -558,8 +564,18 @@ void GFX_CreateTextureResource(Texture* texture, std::vector<uint8_t>& data)
     }
 }
 
+void GFX_UpdateTextureResourcePixels(Texture* texture, const uint8_t* rgba8)
+{
+
+}
+
 void GFX_DestroyTextureResource(Texture* texture)
 {
+    if (texture->IsDynamic())
+    {
+        return;
+    }
+
     TextureResource* resource = texture->GetResource();
     QueueTexFree(resource->mTex);
 

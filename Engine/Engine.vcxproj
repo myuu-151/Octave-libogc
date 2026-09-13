@@ -72,66 +72,66 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='DebugEditor|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseEditor|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Android-arm64-v8a'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
     <AndroidMinSdkVersion>24</AndroidMinSdkVersion>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='DebugEditor|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='DebugEditor|Android-arm64-v8a'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
     <AndroidMinSdkVersion>24</AndroidMinSdkVersion>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Android-arm64-v8a'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
     <AndroidMinSdkVersion>24</AndroidMinSdkVersion>
@@ -139,23 +139,26 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseEditor|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseEditor|Android-arm64-v8a'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
     <AndroidMinSdkVersion>24</AndroidMinSdkVersion>
   </PropertyGroup>
   <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='ReleaseSteam|x64'">
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <CharacterSet>MultiByte</CharacterSet>
     <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='ReleaseSteam|Win32'">
+    <PlatformToolset>v145</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -349,7 +352,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>$(ProjectDir)../External;$(VULKAN_SDK)/Include;$(ProjectDir)Source;$(ProjectDir)Source/Engine;$(ProjectDir)../External/Assimp;$(ProjectDir)../External/Assimp/contrib/rapidjson;$(ProjectDir)../External/Bullet;$(ProjectDir)../External/recastnavigation/Recast/Include;$(ProjectDir)../External/recastnavigation/Detour/Include;$(ProjectDir)Source/Editor;$(ProjectDir)../External/Lua;$(ProjectDir)../External/Vorbis;$(ProjectDir)../External/Imgui;$(ProjectDir)../External/EOS/Include/;$(ProjectDir)../External/Steam/public/steam/</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)../External;$(VULKAN_SDK)/Include;$(ProjectDir)Source;$(ProjectDir)Source/Engine;$(ProjectDir)../External/Assimp;$(ProjectDir)../External/Assimp/contrib/rapidjson;$(ProjectDir)../External/Bullet;$(ProjectDir)../External/recast/Recast/Include;$(ProjectDir)../External/recast/Detour/Include;$(ProjectDir)Source/Editor;$(ProjectDir)../External/Lua;$(ProjectDir)../External/Vorbis;$(ProjectDir)../External/Imgui;$(ProjectDir)../External/EOS/Include/;$(ProjectDir)../External/Steam/public/steam/</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>NET_PLATFORM_STEAM=0;PLATFORM_WINDOWS=1;API_VULKAN=1;EDITOR=1;WIN32;_CRT_SECURE_NO_WARNINGS;VK_USE_PLATFORM_WIN32_KHR;GLM_FORCE_RADIANS;GLM_FORCE_DEPTH_ZERO_TO_ONE;%(PreprocessorDefinitions);NOMINMAX</PreprocessorDefinitions>
       <TreatWarningAsError>true</TreatWarningAsError>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -501,7 +504,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>$(ProjectDir)../External;$(VULKAN_SDK)/Include;$(ProjectDir)Source;$(ProjectDir)Source/Engine;$(ProjectDir)../External/Assimp;$(ProjectDir)../External/Assimp/contrib/rapidjson;$(ProjectDir)../External/Bullet;$(ProjectDir)../External/recastnavigation/Recast/Include;$(ProjectDir)../External/recastnavigation/Detour/Include;$(ProjectDir)Source/Editor;$(ProjectDir)../External/Lua;$(ProjectDir)../External/Vorbis;$(ProjectDir)../External/Imgui;$(ProjectDir)../External/EOS/Include/;$(ProjectDir)../External/Steam/public/steam/</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)../External;$(VULKAN_SDK)/Include;$(ProjectDir)Source;$(ProjectDir)Source/Engine;$(ProjectDir)../External/Assimp;$(ProjectDir)../External/Assimp/contrib/rapidjson;$(ProjectDir)../External/Bullet;$(ProjectDir)../External/recast/Recast/Include;$(ProjectDir)../External/recast/Detour/Include;$(ProjectDir)Source/Editor;$(ProjectDir)../External/Lua;$(ProjectDir)../External/Vorbis;$(ProjectDir)../External/Imgui;$(ProjectDir)../External/EOS/Include/;$(ProjectDir)../External/Steam/public/steam/</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>NET_PLATFORM_STEAM=0;PLATFORM_WINDOWS=1;API_VULKAN=1;EDITOR=1;WIN32;_CRT_SECURE_NO_WARNINGS;VK_USE_PLATFORM_WIN32_KHR;GLM_FORCE_RADIANS;GLM_FORCE_DEPTH_ZERO_TO_ONE;%(PreprocessorDefinitions);NOMINMAX</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
     </ClCompile>
@@ -611,24 +614,24 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='ReleaseSteam|x64'">true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="FeatureFlags.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Recast\Source\Recast.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Recast\Source\RecastAlloc.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Recast\Source\RecastArea.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Recast\Source\RecastAssert.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Recast\Source\RecastContour.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Recast\Source\RecastFilter.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Recast\Source\RecastLayers.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Recast\Source\RecastMesh.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Recast\Source\RecastMeshDetail.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Recast\Source\RecastRasterization.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Recast\Source\RecastRegion.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Detour\Source\DetourAlloc.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Detour\Source\DetourAssert.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Detour\Source\DetourCommon.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Detour\Source\DetourNavMesh.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Detour\Source\DetourNavMeshBuilder.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Detour\Source\DetourNavMeshQuery.cpp" />
-    <ClCompile Include="..\External\recastnavigation\Detour\Source\DetourNode.cpp" />
+    <ClCompile Include="..\External\recast\Recast\Source\Recast.cpp" />
+    <ClCompile Include="..\External\recast\Recast\Source\RecastAlloc.cpp" />
+    <ClCompile Include="..\External\recast\Recast\Source\RecastArea.cpp" />
+    <ClCompile Include="..\External\recast\Recast\Source\RecastAssert.cpp" />
+    <ClCompile Include="..\External\recast\Recast\Source\RecastContour.cpp" />
+    <ClCompile Include="..\External\recast\Recast\Source\RecastFilter.cpp" />
+    <ClCompile Include="..\External\recast\Recast\Source\RecastLayers.cpp" />
+    <ClCompile Include="..\External\recast\Recast\Source\RecastMesh.cpp" />
+    <ClCompile Include="..\External\recast\Recast\Source\RecastMeshDetail.cpp" />
+    <ClCompile Include="..\External\recast\Recast\Source\RecastRasterization.cpp" />
+    <ClCompile Include="..\External\recast\Recast\Source\RecastRegion.cpp" />
+    <ClCompile Include="..\External\recast\Detour\Source\DetourAlloc.cpp" />
+    <ClCompile Include="..\External\recast\Detour\Source\DetourAssert.cpp" />
+    <ClCompile Include="..\External\recast\Detour\Source\DetourCommon.cpp" />
+    <ClCompile Include="..\External\recast\Detour\Source\DetourNavMesh.cpp" />
+    <ClCompile Include="..\External\recast\Detour\Source\DetourNavMeshBuilder.cpp" />
+    <ClCompile Include="..\External\recast\Detour\Source\DetourNavMeshQuery.cpp" />
+    <ClCompile Include="..\External\recast\Detour\Source\DetourNode.cpp" />
     <ClCompile Include="Source\Editor\ImGuizmo\ImGuizmo.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Android-arm64-v8a'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Android-arm64-v8a'">true</ExcludedFromBuild>
@@ -678,6 +681,7 @@
     <ClCompile Include="Source\Engine\Assets\Scene.cpp" />
     <ClCompile Include="Source\Engine\Assets\SkeletalMesh.cpp" />
     <ClCompile Include="Source\Engine\Assets\SoundWave.cpp" />
+    <ClCompile Include="Source\Engine\Assets\VideoClip.cpp" />
     <ClCompile Include="Source\Engine\Assets\StaticMesh.cpp" />
     <ClCompile Include="Source\Engine\Assets\Texture.cpp" />
     <ClCompile Include="Source\Engine\AudioManager.cpp" />
@@ -711,6 +715,7 @@
     <ClCompile Include="Source\Engine\Nodes\3D\SkeletalMesh3d.cpp" />
     <ClCompile Include="Source\Engine\Nodes\3D\Sphere3d.cpp" />
     <ClCompile Include="Source\Engine\Nodes\3D\Spline3d.cpp" />
+    <ClCompile Include="Source\Engine\Nodes\3D\Video3d.cpp" />
     <ClCompile Include="Source\Engine\Nodes\3D\StaticMesh3d.cpp" />
     <ClCompile Include="Source\Engine\Nodes\3D\TestSpinner.cpp" />
     <ClCompile Include="Source\Engine\Nodes\3D\TextMesh3d.cpp" />
@@ -723,6 +728,7 @@
     <ClCompile Include="Source\Engine\Nodes\Widgets\Poly.cpp" />
     <ClCompile Include="Source\Engine\Nodes\Widgets\PolyRect.cpp" />
     <ClCompile Include="Source\Engine\Nodes\Widgets\Quad.cpp" />
+    <ClCompile Include="Source\Engine\Nodes\Widgets\VideoQuad.cpp" />
     <ClCompile Include="Source\Engine\Nodes\Widgets\StatsOverlay.cpp" />
     <ClCompile Include="Source\Engine\Nodes\Widgets\Text.cpp" />
     <ClCompile Include="Source\Engine\Nodes\Widgets\Widget.cpp" />
@@ -738,6 +744,8 @@
     <ClCompile Include="Source\Engine\SmartPointer.cpp" />
     <ClCompile Include="Source\Engine\stb_implementation.cpp" />
     <ClCompile Include="Source\Engine\Stream.cpp" />
+    <ClCompile Include="Source\Engine\VideoStream.cpp" />
+    <ClCompile Include="Source\Engine\VideoPlayer.cpp" />
     <ClCompile Include="Source\Engine\TableDatum.cpp" />
     <ClCompile Include="Source\Engine\TimerManager.cpp" />
     <ClCompile Include="Source\Engine\Utilities.cpp" />
@@ -815,6 +823,7 @@
     <ClCompile Include="Source\LuaBindings\Primitive3d_Lua.cpp" />
     <ClCompile Include="Source\LuaBindings\Property_Lua.cpp" />
     <ClCompile Include="Source\LuaBindings\Quad_Lua.cpp" />
+    <ClCompile Include="Source\LuaBindings\VideoQuad_Lua.cpp" />
     <ClCompile Include="Source\LuaBindings\Rect_Lua.cpp" />
     <ClCompile Include="Source\LuaBindings\Renderer_Lua.cpp" />
     <ClCompile Include="Source\LuaBindings\Scene_Lua.cpp" />
@@ -826,6 +835,7 @@
     <ClCompile Include="Source\LuaBindings\SoundWave_Lua.cpp" />
     <ClCompile Include="Source\LuaBindings\Sphere3d_Lua.cpp" />
     <ClCompile Include="Source\LuaBindings\Spline3d_Lua.cpp" />
+    <ClCompile Include="Source\LuaBindings\Video3d_Lua.cpp" />
     <ClCompile Include="Source\LuaBindings\StaticMesh3d_Lua.cpp" />
     <ClCompile Include="Source\LuaBindings\StaticMesh_Lua.cpp" />
     <ClCompile Include="Source\LuaBindings\Stream_Lua.cpp" />
@@ -929,6 +939,7 @@
     <ClInclude Include="Source\Engine\Assets\Scene.h" />
     <ClInclude Include="Source\Engine\Assets\SkeletalMesh.h" />
     <ClInclude Include="Source\Engine\Assets\SoundWave.h" />
+    <ClInclude Include="Source\Engine\Assets\VideoClip.h" />
     <ClInclude Include="Source\Engine\Assets\StaticMesh.h" />
     <ClInclude Include="Source\Engine\Assets\Texture.h" />
     <ClInclude Include="Source\Engine\AudioManager.h" />
@@ -967,6 +978,7 @@
     <ClInclude Include="Source\Engine\Nodes\3D\SkeletalMesh3d.h" />
     <ClInclude Include="Source\Engine\Nodes\3D\Sphere3d.h" />
     <ClInclude Include="Source\Engine\Nodes\3D\Spline3d.h" />
+    <ClInclude Include="Source\Engine\Nodes\3D\Video3d.h" />
     <ClInclude Include="Source\Engine\Nodes\3D\StaticMesh3d.h" />
     <ClInclude Include="Source\Engine\Nodes\3D\TestSpinner.h" />
     <ClInclude Include="Source\Engine\Nodes\3D\TextMesh3d.h" />
@@ -979,6 +991,7 @@
     <ClInclude Include="Source\Engine\Nodes\Widgets\Poly.h" />
     <ClInclude Include="Source\Engine\Nodes\Widgets\PolyRect.h" />
     <ClInclude Include="Source\Engine\Nodes\Widgets\Quad.h" />
+    <ClInclude Include="Source\Engine\Nodes\Widgets\VideoQuad.h" />
     <ClInclude Include="Source\Engine\Nodes\Widgets\StatsOverlay.h" />
     <ClInclude Include="Source\Engine\Nodes\Widgets\Text.h" />
     <ClInclude Include="Source\Engine\Nodes\Widgets\Widget.h" />
@@ -995,6 +1008,8 @@
     <ClInclude Include="Source\Engine\ScriptUtils.h" />
     <ClInclude Include="Source\Engine\Signals.h" />
     <ClInclude Include="Source\Engine\Stream.h" />
+    <ClInclude Include="Source\Engine\VideoStream.h" />
+    <ClInclude Include="Source\Engine\VideoPlayer.h" />
     <ClInclude Include="Source\Engine\TableDatum.h" />
     <ClInclude Include="Source\Engine\TimerManager.h" />
     <ClInclude Include="Source\Engine\Utilities.h" />
@@ -1072,6 +1087,7 @@
     <ClInclude Include="Source\LuaBindings\Primitive3d_Lua.h" />
     <ClInclude Include="Source\LuaBindings\Property_Lua.h" />
     <ClInclude Include="Source\LuaBindings\Quad_Lua.h" />
+    <ClInclude Include="Source\LuaBindings\VideoQuad_Lua.h" />
     <ClInclude Include="Source\LuaBindings\Rect_Lua.h" />
     <ClInclude Include="Source\LuaBindings\Renderer_Lua.h" />
     <ClInclude Include="Source\LuaBindings\Scene_Lua.h" />
@@ -1083,6 +1099,7 @@
     <ClInclude Include="Source\LuaBindings\SoundWave_Lua.h" />
     <ClInclude Include="Source\LuaBindings\Sphere3d_Lua.h" />
     <ClInclude Include="Source\LuaBindings\Spline3d_Lua.h" />
+    <ClInclude Include="Source\LuaBindings\Video3d_Lua.h" />
     <ClInclude Include="Source\LuaBindings\StaticMesh3d_Lua.h" />
     <ClInclude Include="Source\LuaBindings\StaticMesh_Lua.h" />
     <ClInclude Include="Source\LuaBindings\Stream_Lua.h" />
@@ -1112,5 +1129,3 @@
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>
-
-

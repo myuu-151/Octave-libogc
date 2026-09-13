@@ -192,8 +192,23 @@ extern void OctDvdMount();                                                      
 
 // Read `len` bytes at disc `offset` into `buf` via the active transport: SD = plain
 // fseek/fread on the ISO file; DVD = our DI reader in the separate TU.
+// Asset loads (main thread + async load thread) and video streaming read at the same
+// time, and the SD FILE* position and the DI reader are shared, so serialize reads.
+static MutexObject* sIsoMutex = nullptr;
+
+static MutexObject* GetIsoMutex()
+{
+    if (sIsoMutex == nullptr)
+    {
+        sIsoMutex = SYS_CreateMutex();
+    }
+    return sIsoMutex;
+}
+
 static bool IsoReadRaw(uint32_t offset, void* buf, uint32_t len)
 {
+    SCOPED_LOCK(GetIsoMutex());
+
     if (sIsoMode == ISO_SD)
     {
         if (fseek(sIso, (long)offset, SEEK_SET) != 0) return false;
@@ -570,6 +585,56 @@ void SYS_ReleaseFileData(char* data)
     {
         free(data);
     }
+}
+
+// Loose-file handle kept open between range reads (e.g. a video streaming from the
+// SD), so each read doesn't pay for a FAT open. Guarded by the ISO mutex.
+static FILE* sRangeFile = nullptr;
+static std::string sRangePath;
+
+bool SYS_ReadFileRange(const char* path, bool isAsset, uint32_t offset, uint32_t size, char* outData)
+{
+    if (outData == nullptr)
+    {
+        return false;
+    }
+
+    if (isAsset)
+    {
+        if (!IsoMounted() && sIsoAttempts < 16)
+        {
+            sIsoAttempts++;
+            IsoLocate();
+        }
+
+        IsoEntry ent;
+        if (IsoMounted() && IsoFind(path, ent))
+        {
+            if (uint64_t(offset) + size > ent.size)
+            {
+                return false;
+            }
+
+            return IsoReadRaw(ent.offset + offset, outData, size);
+        }
+    }
+
+    SCOPED_LOCK(GetIsoMutex());
+
+    if (sRangeFile == nullptr || sRangePath != path)
+    {
+        if (sRangeFile != nullptr)
+        {
+            fclose(sRangeFile);
+        }
+
+        sRangeFile = fopen(path, "rb");
+        sRangePath = (sRangeFile != nullptr) ? path : "";
+    }
+
+    return sRangeFile != nullptr &&
+           fseek(sRangeFile, long(offset), SEEK_SET) == 0 &&
+           fread(outData, 1, size, sRangeFile) == size;
 }
 
 std::string SYS_GetCurrentDirectoryPath()

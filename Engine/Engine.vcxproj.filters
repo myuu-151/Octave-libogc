@@ -191,6 +191,12 @@
     <ClCompile Include="Source\Engine\Stream.cpp">
       <Filter>Source Files\Engine</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Engine\VideoStream.cpp">
+      <Filter>Source Files\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Engine\VideoPlayer.cpp">
+      <Filter>Source Files\Engine</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Engine\Utilities.cpp">
       <Filter>Source Files\Engine</Filter>
     </ClCompile>
@@ -326,6 +332,9 @@
     <ClCompile Include="Source\LuaBindings\Quad_Lua.cpp">
       <Filter>Source Files\LuaBindings</Filter>
     </ClCompile>
+    <ClCompile Include="Source\LuaBindings\VideoQuad_Lua.cpp">
+      <Filter>Source Files\LuaBindings</Filter>
+    </ClCompile>
     <ClCompile Include="Source\LuaBindings\Text_Lua.cpp">
       <Filter>Source Files\LuaBindings</Filter>
     </ClCompile>
@@ -348,6 +357,9 @@
       <Filter>Source Files\Engine\Assets</Filter>
     </ClCompile>
     <ClCompile Include="Source\Engine\Assets\SoundWave.cpp">
+      <Filter>Source Files\Engine\Assets</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Engine\Assets\VideoClip.cpp">
       <Filter>Source Files\Engine\Assets</Filter>
     </ClCompile>
     <ClCompile Include="Source\Engine\Assets\StaticMesh.cpp">
@@ -459,6 +471,9 @@
       <Filter>Source Files\Engine\Nodes\Widgets</Filter>
     </ClCompile>
     <ClCompile Include="Source\Engine\Nodes\Widgets\Quad.cpp">
+      <Filter>Source Files\Engine\Nodes\Widgets</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Engine\Nodes\Widgets\VideoQuad.cpp">
       <Filter>Source Files\Engine\Nodes\Widgets</Filter>
     </ClCompile>
     <ClCompile Include="Source\Engine\Nodes\Widgets\StatsOverlay.cpp">
@@ -761,7 +776,13 @@
     <ClCompile Include="Source\Engine\Nodes\3D\Spline3d.cpp">
       <Filter>Source Files\Engine\Nodes\3D</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Engine\Nodes\3D\Video3d.cpp">
+      <Filter>Source Files\Engine\Nodes\3D</Filter>
+    </ClCompile>
     <ClCompile Include="Source\LuaBindings\Spline3d_Lua.cpp">
+      <Filter>Source Files\LuaBindings</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\LuaBindings\Video3d_Lua.cpp">
       <Filter>Source Files\LuaBindings</Filter>
     </ClCompile>
     <ClCompile Include="Source\Editor\Preferences\Appearance\AppearanceModule.cpp">
@@ -793,6 +814,63 @@
     </ClCompile>
     <ClCompile Include="FeatureFlags.cpp">
       <Filter>Source Files\Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Recast\Source\Recast.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Recast\Source\RecastAlloc.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Recast\Source\RecastArea.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Recast\Source\RecastAssert.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Recast\Source\RecastContour.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Recast\Source\RecastFilter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Recast\Source\RecastLayers.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Recast\Source\RecastMesh.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Recast\Source\RecastMeshDetail.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Recast\Source\RecastRasterization.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Recast\Source\RecastRegion.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Detour\Source\DetourAlloc.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Detour\Source\DetourAssert.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Detour\Source\DetourCommon.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Detour\Source\DetourNavMesh.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Detour\Source\DetourNavMeshBuilder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Detour\Source\DetourNavMeshQuery.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\recast\Detour\Source\DetourNode.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Engine\Nodes\3D\NavMesh3d.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -894,6 +972,9 @@
     <ClInclude Include="Source\Engine\Assets\SoundWave.h">
       <Filter>Source Files\Engine\Assets</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Engine\Assets\VideoClip.h">
+      <Filter>Source Files\Engine\Assets</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Engine\Assets\StaticMesh.h">
       <Filter>Source Files\Engine\Assets</Filter>
     </ClInclude>
@@ -916,6 +997,9 @@
       <Filter>Source Files\Engine\Nodes\Widgets</Filter>
     </ClInclude>
     <ClInclude Include="Source\Engine\Nodes\Widgets\Quad.h">
+      <Filter>Source Files\Engine\Nodes\Widgets</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Engine\Nodes\Widgets\VideoQuad.h">
       <Filter>Source Files\Engine\Nodes\Widgets</Filter>
     </ClInclude>
     <ClInclude Include="Source\Engine\Nodes\Widgets\StatsOverlay.h">
@@ -1044,6 +1128,12 @@
     <ClInclude Include="Source\Engine\Stream.h">
       <Filter>Source Files\Engine</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Engine\VideoStream.h">
+      <Filter>Source Files\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Engine\VideoPlayer.h">
+      <Filter>Source Files\Engine</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Graphics\GraphicsConstants.h">
       <Filter>Source Files\Graphics</Filter>
     </ClInclude>
@@ -1168,6 +1258,9 @@
       <Filter>Source Files\LuaBindings</Filter>
     </ClInclude>
     <ClInclude Include="Source\LuaBindings\Quad_Lua.h">
+      <Filter>Source Files\LuaBindings</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\LuaBindings\VideoQuad_Lua.h">
       <Filter>Source Files\LuaBindings</Filter>
     </ClInclude>
     <ClInclude Include="Source\LuaBindings\Rect_Lua.h">
@@ -1473,7 +1566,13 @@
     <ClInclude Include="Source\Engine\Nodes\3D\Spline3d.h">
       <Filter>Source Files\Engine\Nodes\3D</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Engine\Nodes\3D\Video3d.h">
+      <Filter>Source Files\Engine\Nodes\3D</Filter>
+    </ClInclude>
     <ClInclude Include="Source\LuaBindings\Spline3d_Lua.h">
+      <Filter>Source Files\LuaBindings</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\LuaBindings\Video3d_Lua.h">
       <Filter>Source Files\LuaBindings</Filter>
     </ClInclude>
     <ClInclude Include="Source\Editor\Preferences\Appearance\AppearanceModule.h">
@@ -1506,5 +1605,6 @@
     <ClInclude Include="FeatureFlags.h">
       <Filter>Source Files\Editor</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Engine\Nodes\3D\NavMesh3d.h" />
   </ItemGroup>
 </Project>
