@@ -521,10 +521,21 @@ void Renderer::LoadDefaultMeshes()
     mSphere112Mesh = LoadAsset("SM_Sphere_112");
     mTorusMesh = LoadAsset("SM_Torus");
 
-    // Setup collision on several meshes
-    // Did you crash here? Make sure you package the project once from the editor to build .oct files for engine assets.
-    mCubeMesh.Get<StaticMesh>()->SetCollisionShape(new btBoxShape(btVector3(1.0f, 1.0f, 1.0f)));
-    mSphereMesh.Get<StaticMesh>()->SetCollisionShape(new btSphereShape(1.0f));
+    // Setup collision on several meshes.
+    // NOTE: null-guard these. If an engine default mesh (.oct) isn't resolved at this
+    // instant -- which is timing-dependent on the asset transport (SD/DVD/embedded) and
+    // was the root of a long-standing intermittent DSI crash (SetCollisionShape reads
+    // this->mCollisionShape at +0x68, so a null StaticMesh* faulted at address 0x68) --
+    // skip the collision setup instead of dereferencing null. Package the project once
+    // from the editor so the engine .oct files exist if collision is actually needed.
+    if (StaticMesh* cubeMesh = mCubeMesh.Get<StaticMesh>())
+    {
+        cubeMesh->SetCollisionShape(new btBoxShape(btVector3(1.0f, 1.0f, 1.0f)));
+    }
+    if (StaticMesh* sphereMesh = mSphereMesh.Get<StaticMesh>())
+    {
+        sphereMesh->SetCollisionShape(new btSphereShape(1.0f));
+    }
 }
 
 void Renderer::LoadDefaultFonts()

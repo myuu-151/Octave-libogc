@@ -375,20 +375,17 @@ static void IsoLocate()
         if (IsoOpenSD(c.c_str())) return;
     }
 
-    // 2) No SD image found on THIS attempt. The DVD transport (DVD_Init/DVD_Mount)
-    //    must NOT be poked on an early miss: on an empty-drive SD rig those calls hang
-    //    real hardware (Dolphin tolerates them), and the SD ISO often isn't resolvable
-    //    on the very first asset access (project path / FAT not settled yet). v1.3
-    //    shipped SD-only and booted reliably by simply retrying SD. Preserve that:
-    //    only fall back to the physical disc as a true last resort, after SD has been
-    //    retried to exhaustion -- i.e. a genuine real-disc boot where no SD ISO will
-    //    ever appear. On an SD rig, SD mounts within the retries and we never get here.
-    if (sIsoAttempts < 16)
-    {
-        IsoLog("ISO: no SD image on attempt %d -- retry SD (not touching drive)", (int)sIsoAttempts);
-        return;
-    }
-    IsoLog("ISO: SD exhausted after %d attempts -- trying DVD transport", (int)sIsoAttempts);
+    // 2) No SD image found -> read the physical disc via the DI reader, NOW.
+    //    We only reach here after the project name is set (checked above), which means
+    //    LoadProject has run, which is after SYS_Initialize's fatInitDefault -- so the FAT
+    //    is up and a failed SD open genuinely means there is no SD ISO, i.e. a real-disc
+    //    (or Dolphin) boot. The DI reader links no libogc and is BOUNDED (it can't hang,
+    //    even on an empty drive), unlike the old libogc DVD_Init/DVD_Mount that forced the
+    //    old "wait 16 attempts" gate. Mount promptly: gating the disc mount behind many
+    //    retries left the engine's default assets (meshes/fonts) unresolved when the
+    //    renderer needed them -> null derefs / DSI crashes on a disc boot. On an SD rig the
+    //    SD open above succeeds first, so we never touch the drive here.
+    IsoLog("ISO: no SD image -- reading the disc via the DI transport");
     IsoOpenDVD();
 }
 
