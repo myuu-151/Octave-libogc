@@ -15,6 +15,12 @@
 void OctLog(const char* format, ...);
 #endif
 
+#if PLATFORM_GAMECUBE
+// SD driver diagnostics (SdGeckoDma.c).
+extern "C" const char* OctSd_GetModeName(int chan);
+extern "C" int OctSd_TakeEvent(char* buffer, int size);
+#endif
+
 // Longest step the playback clock takes in one tick (e.g. after a hitch).
 static constexpr double kMaxTickSeconds = 0.25;
 
@@ -172,7 +178,17 @@ void VideoPlayer::Update(VideoClip* clip)
         float audioBufferedMs = 0.0f;
         if (GetStats(stats, audioBufferedMs))
         {
-            OctLog("VIDEO t=%.2f read=%.1fms decode=%.1fms decoded=%u late=%u failed=%u queued=%u audio=%.0fms",
+            const char* sdMode = "n/a";
+#if PLATFORM_GAMECUBE
+            // Driver events (mounts, failed reads and step-downs) queued since the last line.
+            char sdEvent[128];
+            while (OctSd_TakeEvent(sdEvent, sizeof(sdEvent)))
+            {
+                OctLog("SD %s", sdEvent);
+            }
+            sdMode = OctSd_GetModeName(-1);
+#endif
+            OctLog("VIDEO t=%.2f read=%.1fms decode=%.1fms decoded=%u late=%u failed=%u queued=%u audio=%.0fms sd=%s",
                 mTime,
                 stats.mReadMs,
                 stats.mDecodeMs,
@@ -180,7 +196,8 @@ void VideoPlayer::Update(VideoClip* clip)
                 unsigned(stats.mLateFrames),
                 unsigned(stats.mFailedFrames),
                 unsigned(stats.mQueuedFrames),
-                audioBufferedMs);
+                audioBufferedMs,
+                sdMode);
         }
     }
 #endif

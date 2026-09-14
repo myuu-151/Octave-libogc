@@ -30,11 +30,27 @@
 
 #define ENABLE_LIBOGC_CONSOLE 0
 
+#if PLATFORM_GAMECUBE
+// SdGeckoDma.c: libogc's SD Gecko driver with DMA reads and a faster EXI clock.
+extern "C" int OctSd_MountAll(void);
+extern "C" const char* OctSd_GetModeName(int chan);
+static int sSdChannel = -1;
+#endif
+
 static bool sFatInit = false;
 static void InitFAT()
 {
     if (!sFatInit)
     {
+#if PLATFORM_GAMECUBE
+        sSdChannel = OctSd_MountAll();
+        if (sSdChannel >= 0)
+        {
+            LogDebug("FAT Initialized (EXI channel %d, mode %s).\n", sSdChannel, OctSd_GetModeName(sSdChannel));
+            sFatInit = true;
+            return;
+        }
+#endif
         if (fatInitDefault())
         {
             LogDebug("FAT Initialized Successfully.\n");
