@@ -5,6 +5,7 @@
 #include "VideoPlayer.h"
 
 class VideoClip;
+class Text;
 
 // A widget that plays a VideoClip. With Fill Screen on (the default) it covers the
 // whole screen regardless of its parent or anchor, for fullscreen cutscenes; turn it
@@ -56,6 +57,10 @@ public:
     void SetFillScreen(bool fillScreen);
     bool GetFillScreen() const;
 
+    // Draws decoder timing and buffering over the video, to diagnose stutter.
+    void SetShowStats(bool showStats);
+    bool GetShowStats() const;
+
     static bool HandleVideoPropChange(Datum* datum, uint32_t index, const void* newValue);
 
 protected:
@@ -64,6 +69,8 @@ protected:
     void SyncPlayerSettings();
     void ApplyVideoTexture();
     Rect GetScreenRect();
+    void UpdateStatsOverlay();
+    void RemoveStatsOverlay();
 
     // Properties
     AssetRef mVideoClip;
@@ -72,9 +79,12 @@ protected:
     bool mAudioEnabled = true;
     bool mFillScreen = true;
     bool mGpuColorConversion = true;
+    bool mShowStats = false;
     float mVolume = 1.0f;
 
     // State
     VideoPlayer mPlayer;
     bool mPlaying = false;
+    Text* mStatsText = nullptr;     // Transient child, never saved
+    uint64_t mStatsUpdateUs = 0;
 };

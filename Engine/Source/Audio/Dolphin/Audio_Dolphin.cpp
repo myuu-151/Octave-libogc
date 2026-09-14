@@ -129,12 +129,21 @@ static void StreamCallback(s32 voice) { (void)voice; }
 // ---------------------------------------------------------------------------
 // Push-PCM streams (AUD_OpenStream)
 //
-// Audio produced at runtime (e.g. a video soundtrack) is queued into a FIFO and
-// fed to ASND the same way as the Vorbis streams above: one buffer playing, one
-// queued with ASND_AddVoice. These use ASND voices above AUD_Play's range.
+// Audio produced at runtime (e.g. a video soundtrack) is queued into a FIFO and fed
+// to ASND in ~100 ms buffers: one playing, one queued with ASND_AddVoice. These use
+// ASND voices above AUD_Play's range.
+//
+// libasnd details this relies on (see libasnd/asndlib.c):
+// - ASND_StatusVoice only reports paused/unused, never "drained", and
+//   ASND_TestVoiceBufferReady is also true when the voice has nothing at all.
+// - ASND_AddVoice fails while a previous add hasn't been picked up by the mixer.
+// So data only leaves the FIFO once ASND accepts it, and a free buffer is one
+// ASND_TestPointer says ASND isn't using. The played position comes from ASND's
+// per-voice tick counter, which only advances while the voice has data.
 // ---------------------------------------------------------------------------
 
 #define AUD_MAX_PCM_STREAMS 4
+#define AUD_PCM_STREAM_BUFFERS 3
 
 struct PcmStream
 {
@@ -146,14 +155,11 @@ struct PcmStream
     uint32_t sampleRate = 0;
     uint32_t frameBytes = 4;
     int32_t  volume = MID_VOLUME;
-    uint8_t* buf[2] = { nullptr, nullptr };
+    uint8_t* buf[AUD_PCM_STREAM_BUFFERS] = { nullptr, nullptr, nullptr };
     uint32_t bufCapacity = 0;
-    uint32_t inFlight[2] = { 0, 0 };    // bytes in the playing buffer, then the queued one
-    int32_t  numInFlight = 0;
-    int32_t  nextBuf = 0;
     std::vector<uint8_t> pending;
     uint32_t pendingHead = 0;
-    uint64_t playedBytes = 0;
+    uint32_t tickBase = 0;              // ASND tick counter when the voice (re)started
 };
 
 static PcmStream sPcmStreams[AUD_MAX_PCM_STREAMS];
@@ -172,20 +178,12 @@ static uint32_t PcmPendingBytes(const PcmStream& s)
     return uint32_t(s.pending.size()) - s.pendingHead;
 }
 
-// Take up to maxBytes (whole sample frames) from the FIFO.
-static uint32_t PcmTake(PcmStream& s, uint8_t* dst, uint32_t maxBytes)
+// Removes n bytes from the front of the FIFO.
+static void PcmConsume(PcmStream& s, uint32_t n)
 {
-    uint32_t n = PcmPendingBytes(s);
-    if (n > maxBytes) n = maxBytes;
-    n -= n % s.frameBytes;
+    s.pendingHead += n;
 
-    if (n > 0)
-    {
-        memcpy(dst, s.pending.data() + s.pendingHead, n);
-        s.pendingHead += n;
-    }
-
-    if (s.pendingHead == s.pending.size())
+    if (s.pendingHead >= s.pending.size())
     {
         s.pending.clear();
         s.pendingHead = 0;
@@ -195,82 +193,47 @@ static uint32_t PcmTake(PcmStream& s, uint8_t* dst, uint32_t maxBytes)
         s.pending.erase(s.pending.begin(), s.pending.begin() + s.pendingHead);
         s.pendingHead = 0;
     }
-
-    return n;
 }
 
-// Count buffers ASND has finished playing.
-static void PcmUpdatePlayed(PcmStream& s)
-{
-    if (!s.started || s.paused)
-        return;
-
-    s32 status = ASND_StatusVoice(s.voice);
-
-    if (status != SND_WORKING)
-    {
-        // Drained (the keep-alive callback parks it in SND_WAITING): all played.
-        for (int32_t i = 0; i < s.numInFlight; ++i)
-            s.playedBytes += s.inFlight[i];
-        s.numInFlight = 0;
-
-        if (status == SND_UNUSED)
-            s.started = false;
-    }
-    else if (s.numInFlight == 2 && ASND_TestVoiceBufferReady(s.voice) == 1)
-    {
-        // The queued buffer moved up, so the first one finished.
-        s.playedBytes += s.inFlight[0];
-        s.inFlight[0] = s.inFlight[1];
-        s.numInFlight = 1;
-    }
-}
-
+// Hands the next full buffer of PCM to ASND if it has room. One buffer per call is
+// enough (each holds ~100 ms and this runs every frame), and a second AddVoice would
+// fail anyway until ASND's mixer picks up the first.
 static void PcmFeed(PcmStream& s)
 {
-    PcmUpdatePlayed(s);
-
-    if (s.paused)
+    if (s.paused || PcmPendingBytes(s) < s.bufCapacity)
         return;
+
+    const uint8_t* src = s.pending.data() + s.pendingHead;
 
     if (!s.started)
     {
-        // Wait for a full buffer so playback doesn't start with an underrun.
-        if (PcmPendingBytes(s) < s.bufCapacity)
-            return;
+        memcpy(s.buf[0], src, s.bufCapacity);
+        s.tickBase = ASND_GetTickCounterVoice(s.voice);
 
-        uint32_t n = PcmTake(s, s.buf[0], s.bufCapacity);
-        DCFlushRange(s.buf[0], s.bufCapacity);
-
-        if (ASND_SetVoice(s.voice, s.format, s.sampleRate, 0, s.buf[0], n, s.volume, s.volume, StreamCallback) != SND_OK)
-            return;
-
-        s.started = true;
-        s.inFlight[0] = n;
-        s.numInFlight = 1;
-        s.nextBuf = 1;
+        if (ASND_SetVoice(s.voice, s.format, s.sampleRate, 0, s.buf[0], s.bufCapacity, s.volume, s.volume, StreamCallback) == SND_OK)
+        {
+            PcmConsume(s, s.bufCapacity);
+            s.started = true;
+        }
+        return;
     }
 
-    while (s.numInFlight < 2 && ASND_TestVoiceBufferReady(s.voice) == 1)
+    // Room for another buffer (one is playing with nothing queued, or it ran dry).
+    if (ASND_TestVoiceBufferReady(s.voice) != 1)
+        return;
+
+    for (uint32_t i = 0; i < AUD_PCM_STREAM_BUFFERS; ++i)
     {
-        // Queue full buffers. If the voice has run dry, send whatever is left so
-        // the end of the stream still plays.
-        uint32_t avail = PcmPendingBytes(s);
-        if (avail < s.bufCapacity && !(s.numInFlight == 0 && avail >= s.frameBytes))
-            break;
+        if (ASND_TestPointer(s.voice, s.buf[i]) == SND_BUSY)
+            continue;   // ASND is still reading from it
 
-        uint8_t* dst = s.buf[s.nextBuf];
-        uint32_t n = PcmTake(s, dst, s.bufCapacity);
-        if (n == 0)
-            break;
+        memcpy(s.buf[i], src, s.bufCapacity);
 
-        DCFlushRange(dst, s.bufCapacity);
-
-        if (ASND_AddVoice(s.voice, dst, n) != SND_OK)
-            break;
-
-        s.inFlight[s.numInFlight++] = n;
-        s.nextBuf ^= 1;
+        if (ASND_AddVoice(s.voice, s.buf[i], s.bufCapacity) == SND_OK)
+        {
+            PcmConsume(s, s.bufCapacity);
+        }
+        return;
     }
 }
 
@@ -515,14 +478,21 @@ uint32_t AUD_OpenStream(uint32_t sampleRate, uint32_t numChannels)
         s.bufCapacity -= s.bufCapacity % s.frameBytes;
 
         uint32_t allocSize = (s.bufCapacity + 31) & ~31u;
-        s.buf[0] = (uint8_t*)memalign(32, allocSize);
-        s.buf[1] = (uint8_t*)memalign(32, allocSize);
+        bool allocated = true;
 
-        if (s.buf[0] == nullptr || s.buf[1] == nullptr)
+        for (uint32_t b = 0; b < AUD_PCM_STREAM_BUFFERS; ++b)
+        {
+            s.buf[b] = (uint8_t*)memalign(32, allocSize);
+            allocated = allocated && (s.buf[b] != nullptr);
+        }
+
+        if (!allocated)
         {
             LogError("AUD_OpenStream: failed to allocate stream buffers.");
-            if (s.buf[0]) free(s.buf[0]);
-            if (s.buf[1]) free(s.buf[1]);
+            for (uint32_t b = 0; b < AUD_PCM_STREAM_BUFFERS; ++b)
+            {
+                if (s.buf[b]) free(s.buf[b]);
+            }
             s = PcmStream();
             return 0;
         }
@@ -542,8 +512,10 @@ void AUD_CloseStream(uint32_t streamId)
 
     ASND_StopVoice(s->voice);
 
-    if (s->buf[0]) free(s->buf[0]);
-    if (s->buf[1]) free(s->buf[1]);
+    for (uint32_t b = 0; b < AUD_PCM_STREAM_BUFFERS; ++b)
+    {
+        if (s->buf[b]) free(s->buf[b]);
+    }
 
     *s = PcmStream();
 }
@@ -561,11 +533,18 @@ void AUD_QueueStreamData(uint32_t streamId, const uint8_t* data, uint32_t size)
 uint64_t AUD_GetStreamPlayedFrames(uint32_t streamId)
 {
     PcmStream* s = GetPcmStream(streamId);
-    if (s == nullptr)
+    if (s == nullptr || !s->started)
         return 0;
 
-    PcmUpdatePlayed(*s);
-    return s->playedBytes / s->frameBytes;
+    // ASND counts 48 kHz output samples (in steps of 1024) while the voice has data
+    // and isn't paused, so this is how much of the stream has actually played.
+    uint32_t ticks = ASND_GetTickCounterVoice(s->voice);
+    if (ticks < s->tickBase)
+    {
+        s->tickBase = 0;    // ASND_SetVoice reset the counter
+    }
+
+    return uint64_t(ticks - s->tickBase) * s->sampleRate / 48000;
 }
 
 void AUD_SetStreamPaused(uint32_t streamId, bool paused)
@@ -573,9 +552,6 @@ void AUD_SetStreamPaused(uint32_t streamId, bool paused)
     PcmStream* s = GetPcmStream(streamId);
     if (s == nullptr || s->paused == paused)
         return;
-
-    if (paused)
-        PcmUpdatePlayed(*s);
 
     s->paused = paused;
 
@@ -610,10 +586,8 @@ void AUD_FlushStream(uint32_t streamId)
 
     ASND_StopVoice(s->voice);
     s->started = false;
-    s->numInFlight = 0;
     s->pending.clear();
     s->pendingHead = 0;
-    s->playedBytes = 0;
 }
 
 #endif

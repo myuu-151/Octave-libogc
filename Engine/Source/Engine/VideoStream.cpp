@@ -39,6 +39,10 @@ static constexpr size_t kMaxQueuedFrames = 2;
 static constexpr size_t kMaxQueuedFrames = 3;
 #endif
 
+// Records read ahead of decoding (about half a second at 30 fps). Their audio is
+// delivered as soon as they're read, so this is also how far audio can run ahead.
+static constexpr size_t kMaxPendingRecords = 15;
+
 // Records in a row that fail to load or decode before playback gives up.
 static constexpr uint32_t kMaxConsecutiveFailures = 30;
 
@@ -138,6 +142,8 @@ bool VideoStream::Open(VideoClip* clip, VideoFrameFormat format)
     mSeekRecord = -1;
     mDroppedFrames = 0;
     mConsecutiveFailures = 0;
+    mPlaybackTime = 0.0;
+    mStats = VideoStreamStats();
     mDecodedAll = false;
     mError = false;
     mExit = false;
@@ -182,8 +188,6 @@ void VideoStream::Close()
 
 bool VideoStream::AllocateBuffers()
 {
-    mRecord.resize(mClip->GetMaxRecordSize());
-
     const uint32_t lumaSize = mWidth * mHeight;
     const uint32_t chromaSize = (mWidth / 2) * (mHeight / 2);
     uint32_t planeSizes[3] = { 0, 0, 0 };
@@ -244,6 +248,15 @@ bool VideoStream::AllocateBuffers()
         mFreeSlots.push_back(int32_t(i));
     }
 
+    mRecordBuffers.resize(kMaxPendingRecords);
+    mFreeRecordBuffers.clear();
+
+    for (uint32_t i = 0; i < kMaxPendingRecords; ++i)
+    {
+        mRecordBuffers[i].resize(mClip->GetMaxRecordSize());
+        mFreeRecordBuffers.push_back(int32_t(i));
+    }
+
     return true;
 }
 
@@ -263,6 +276,11 @@ void VideoStream::FreeBuffers()
     mSlots.clear();
     mFreeSlots.clear();
 
+    mRecordBuffers.clear();
+    mRecordBuffers.shrink_to_fit();
+    mFreeRecordBuffers.clear();
+    mPendingRecords.clear();
+
     for (uint32_t p = 0; p < 3; ++p)
     {
         if (mScratchPlanes[p] != nullptr)
@@ -274,9 +292,6 @@ void VideoStream::FreeBuffers()
 
     delete mJpeg;
     mJpeg = nullptr;
-
-    mRecord.clear();
-    mRecord.shrink_to_fit();
 }
 
 double VideoStream::Seek(double seconds)
@@ -295,9 +310,34 @@ double VideoStream::Seek(double seconds)
     mGeneration++;
     mDecodedAll = false;
     mConsecutiveFailures = 0;
+    mPlaybackTime = record / frameRate;
     ClearQueuesLocked();
 
-    return record / frameRate;
+    return mPlaybackTime;
+}
+
+void VideoStream::SetPlaybackTime(double seconds)
+{
+    if (mMutex == nullptr)
+    {
+        return;
+    }
+
+    SCOPED_LOCK(mMutex);
+    mPlaybackTime = seconds;
+}
+
+VideoStreamStats VideoStream::GetStats()
+{
+    if (mMutex == nullptr)
+    {
+        return VideoStreamStats();
+    }
+
+    SCOPED_LOCK(mMutex);
+    VideoStreamStats stats = mStats;
+    stats.mQueuedFrames = uint32_t(mFrames.size());
+    return stats;
 }
 
 bool VideoStream::PopFrame(double maxTime, Frame& outFrame)
@@ -399,7 +439,7 @@ ThreadFuncRet VideoStream::ThreadMain(void* arg)
 #if PLATFORM_DOLPHIN
     // The main thread runs at priority 64. Decoding below it means the decoder only
     // gets time the main thread spends blocked (e.g. waiting for vsync), so video
-    // never stalls rendering. It falls behind (dropping frames) if the CPU is too busy.
+    // never stalls rendering.
     LWP_SetThreadPriority(LWP_GetSelf(), 40);
 #endif
 
@@ -410,16 +450,8 @@ ThreadFuncRet VideoStream::ThreadMain(void* arg)
 
 void VideoStream::WorkerLoop()
 {
-    const uint32_t numFrames = mClip->GetNumFrames();
-    const double frameRate = mClip->GetFrameRate();
-
     while (true)
     {
-        uint32_t index = 0;
-        uint32_t generation = 0;
-        int32_t slotIndex = -1;
-        bool idle = false;
-
         {
             SCOPED_LOCK(mMutex);
 
@@ -433,92 +465,183 @@ void VideoStream::WorkerLoop()
                 mNextRecord = uint32_t(mSeekRecord);
                 mSeekRecord = -1;
             }
-
-            index = mNextRecord;
-            generation = mGeneration;
-
-            if (mError || mFrames.size() >= kMaxQueuedFrames || mFreeSlots.empty())
-            {
-                idle = true;
-            }
-            else if (index >= numFrames)
-            {
-                mDecodedAll = true;
-                idle = true;
-            }
-            else
-            {
-                slotIndex = mFreeSlots.back();
-                mFreeSlots.pop_back();
-            }
         }
 
-        if (idle)
+        // Read before decoding, so audio keeps flowing even when decoding falls behind.
+        const bool read = ReadNextRecord();
+        const bool decoded = DecodeNextFrame();
+
+        if (!read && !decoded)
         {
             SYS_Sleep(2);
-            continue;
         }
+    }
+}
 
-        const uint32_t recordSize = mClip->GetRecordSize(index);
-        const bool readOk = recordSize >= 8 &&
-                            recordSize <= mRecord.size() &&
-                            mClip->ReadRecord(index, mRecord.data());
+bool VideoStream::ReadNextRecord()
+{
+    uint32_t index = 0;
+    uint32_t generation = 0;
+    int32_t bufferIndex = -1;
 
-        uint32_t audioBytes = 0;
-        bool decoded = false;
-
-        if (readOk)
-        {
-            audioBytes = ReadU32LE(mRecord.data());
-            const uint32_t jpegBytes = ReadU32LE(mRecord.data() + 4);
-
-            if ((uint64_t(8) + audioBytes + jpegBytes) <= recordSize)
-            {
-                decoded = DecodeFrame(mRecord.data() + 8 + audioBytes, jpegBytes, mSlots[slotIndex]);
-            }
-            else
-            {
-                audioBytes = 0;
-            }
-        }
-
+    {
         SCOPED_LOCK(mMutex);
 
-        if (generation != mGeneration)
+        if (mError || mFreeRecordBuffers.empty() || mNextRecord >= mClip->GetNumFrames())
         {
-            // A seek happened while decoding; this frame belongs to the old position.
-            ReleaseSlotLocked(slotIndex);
-            continue;
+            return false;
         }
 
-        mNextRecord = index + 1;
-        mAudio.insert(mAudio.end(), mRecord.data() + 8, mRecord.data() + 8 + audioBytes);
-
-        if (!decoded)
-        {
-            // Skip the frame but keep going; the last good frame stays on screen.
-            ReleaseSlotLocked(slotIndex);
-            mDroppedFrames++;
-
-            if (++mConsecutiveFailures >= kMaxConsecutiveFailures)
-            {
-                mError = true;
-            }
-            continue;
-        }
-
-        mConsecutiveFailures = 0;
-
-        Frame frame;
-        frame.mSlot = slotIndex;
-        frame.mTime = index / frameRate;
-        for (uint32_t p = 0; p < 3; ++p)
-        {
-            frame.mPlanes[p] = mSlots[slotIndex].mPlanes[p];
-        }
-
-        mFrames.push_back(frame);
+        index = mNextRecord;
+        generation = mGeneration;
+        bufferIndex = mFreeRecordBuffers.back();
+        mFreeRecordBuffers.pop_back();
     }
+
+    std::vector<uint8_t>& buffer = mRecordBuffers[bufferIndex];
+
+    const uint64_t readStartUs = SYS_GetTimeMicroseconds();
+    const uint32_t recordSize = mClip->GetRecordSize(index);
+    const bool readOk = recordSize >= 8 &&
+                        recordSize <= buffer.size() &&
+                        mClip->ReadRecord(index, buffer.data());
+    const uint64_t readEndUs = SYS_GetTimeMicroseconds();
+
+    uint32_t audioBytes = 0;
+    uint32_t jpegBytes = 0;
+    bool valid = false;
+
+    if (readOk)
+    {
+        audioBytes = ReadU32LE(buffer.data());
+        jpegBytes = ReadU32LE(buffer.data() + 4);
+        valid = (uint64_t(8) + audioBytes + jpegBytes) <= recordSize;
+    }
+
+    SCOPED_LOCK(mMutex);
+
+    if (generation != mGeneration)
+    {
+        // A seek happened while reading; this record belongs to the old position.
+        mFreeRecordBuffers.push_back(bufferIndex);
+        return true;
+    }
+
+    mNextRecord = index + 1;
+
+    if (!valid)
+    {
+        mFreeRecordBuffers.push_back(bufferIndex);
+        RecordFailureLocked();
+        return true;
+    }
+
+    const float readMs = float(double(readEndUs - readStartUs) / 1000.0);
+    mStats.mReadMs += (readMs - mStats.mReadMs) * 0.1f;
+
+    mAudio.insert(mAudio.end(), buffer.data() + 8, buffer.data() + 8 + audioBytes);
+
+    PendingRecord pending;
+    pending.mIndex = index;
+    pending.mBuffer = bufferIndex;
+    pending.mJpegOffset = 8 + audioBytes;
+    pending.mJpegSize = jpegBytes;
+    mPendingRecords.push_back(pending);
+
+    return true;
+}
+
+bool VideoStream::DecodeNextFrame()
+{
+    PendingRecord pending;
+    int32_t slotIndex = -1;
+    uint32_t generation = 0;
+    double frameRate = 0.0;
+
+    {
+        SCOPED_LOCK(mMutex);
+
+        if (mPendingRecords.empty())
+        {
+            if (mNextRecord >= mClip->GetNumFrames())
+            {
+                mDecodedAll = true;
+            }
+            return false;
+        }
+
+        if (mFrames.size() >= kMaxQueuedFrames)
+        {
+            return false;
+        }
+
+        frameRate = mClip->GetFrameRate();
+        const double frameDuration = 1.0 / frameRate;
+        pending = mPendingRecords.front();
+
+        // A frame already a whole frame behind playback would be dropped as soon as
+        // it arrived, so don't spend time decoding it. Its audio was delivered on read.
+        if (pending.mIndex * frameDuration + frameDuration < mPlaybackTime)
+        {
+            mPendingRecords.pop_front();
+            mFreeRecordBuffers.push_back(pending.mBuffer);
+            mStats.mLateFrames++;
+            return true;
+        }
+
+        if (mFreeSlots.empty())
+        {
+            return false;
+        }
+
+        mPendingRecords.pop_front();
+        slotIndex = mFreeSlots.back();
+        mFreeSlots.pop_back();
+        generation = mGeneration;
+    }
+
+    const uint64_t decodeStartUs = SYS_GetTimeMicroseconds();
+    const bool decoded = DecodeFrame(
+        mRecordBuffers[pending.mBuffer].data() + pending.mJpegOffset,
+        pending.mJpegSize,
+        mSlots[slotIndex]);
+    const uint64_t decodeEndUs = SYS_GetTimeMicroseconds();
+
+    SCOPED_LOCK(mMutex);
+
+    mFreeRecordBuffers.push_back(pending.mBuffer);
+
+    if (generation != mGeneration)
+    {
+        // A seek happened while decoding; this frame belongs to the old position.
+        ReleaseSlotLocked(slotIndex);
+        return true;
+    }
+
+    if (!decoded)
+    {
+        // Skip the frame but keep going; the last good frame stays on screen.
+        ReleaseSlotLocked(slotIndex);
+        RecordFailureLocked();
+        return true;
+    }
+
+    mConsecutiveFailures = 0;
+
+    const float decodeMs = float(double(decodeEndUs - decodeStartUs) / 1000.0);
+    mStats.mDecodeMs += (decodeMs - mStats.mDecodeMs) * 0.1f;
+    mStats.mDecodedFrames++;
+
+    Frame frame;
+    frame.mSlot = slotIndex;
+    frame.mTime = pending.mIndex / frameRate;
+    for (uint32_t p = 0; p < 3; ++p)
+    {
+        frame.mPlanes[p] = mSlots[slotIndex].mPlanes[p];
+    }
+
+    mFrames.push_back(frame);
+    return true;
 }
 
 bool VideoStream::DecodeFrame(const uint8_t* jpeg, uint32_t jpegSize, Slot& slot)
@@ -611,6 +734,17 @@ void VideoStream::ReleaseSlotLocked(int32_t slot)
     }
 }
 
+void VideoStream::RecordFailureLocked()
+{
+    mDroppedFrames++;
+    mStats.mFailedFrames++;
+
+    if (++mConsecutiveFailures >= kMaxConsecutiveFailures)
+    {
+        mError = true;
+    }
+}
+
 void VideoStream::ClearQueuesLocked()
 {
     for (Frame& frame : mFrames)
@@ -618,6 +752,12 @@ void VideoStream::ClearQueuesLocked()
         ReleaseSlotLocked(frame.mSlot);
     }
 
+    for (PendingRecord& pending : mPendingRecords)
+    {
+        mFreeRecordBuffers.push_back(pending.mBuffer);
+    }
+
     mFrames.clear();
+    mPendingRecords.clear();
     mAudio.clear();
 }

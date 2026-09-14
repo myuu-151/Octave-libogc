@@ -196,6 +196,13 @@ extern void OctDvdMount();                                                      
 // time, and the SD FILE* position and the DI reader are shared, so serialize reads.
 static MutexObject* sIsoMutex = nullptr;
 
+// Where the SD ISO file's read position is, so sequential reads can skip fseek.
+static uint32_t sIsoFilePos = UINT32_MAX;
+
+// stdio buffer for the SD ISO file: bigger chunks per FAT read for streaming.
+static constexpr size_t kIsoFileBufferSize = 128 * 1024;
+static char* sIsoFileBuffer = nullptr;
+
 static MutexObject* GetIsoMutex()
 {
     if (sIsoMutex == nullptr)
@@ -211,8 +218,17 @@ static bool IsoReadRaw(uint32_t offset, void* buf, uint32_t len)
 
     if (sIsoMode == ISO_SD)
     {
-        if (fseek(sIso, (long)offset, SEEK_SET) != 0) return false;
-        return fread(buf, 1, len, sIso) == len;
+        // Sequential reads (e.g. video streaming) skip the seek: fseek discards stdio's
+        // buffered data, and libfat may walk the file's cluster chain to find the offset.
+        if (offset != sIsoFilePos && fseek(sIso, (long)offset, SEEK_SET) != 0)
+        {
+            sIsoFilePos = UINT32_MAX;
+            return false;
+        }
+
+        const bool ok = fread(buf, 1, len, sIso) == len;
+        sIsoFilePos = ok ? (offset + len) : UINT32_MAX;
+        return ok;
     }
     if (sIsoMode == ISO_DVD)
     {
@@ -312,7 +328,18 @@ static bool IsoOpenSD(const char* isoPath)
 {
     FILE* f = fopen(isoPath, "rb");
     if (f == nullptr) return false;
+
+    if (sIsoFileBuffer == nullptr)
+    {
+        sIsoFileBuffer = (char*)malloc(kIsoFileBufferSize);
+    }
+    if (sIsoFileBuffer != nullptr)
+    {
+        setvbuf(f, sIsoFileBuffer, _IOFBF, kIsoFileBufferSize);
+    }
+
     sIso = f;
+    sIsoFilePos = 0;
     sIsoMode = ISO_SD;
     if (IsoParseFst())
     {
@@ -635,6 +662,21 @@ bool SYS_ReadFileRange(const char* path, bool isAsset, uint32_t offset, uint32_t
     return sRangeFile != nullptr &&
            fseek(sRangeFile, long(offset), SEEK_SET) == 0 &&
            fread(outData, 1, size, sRangeFile) == size;
+}
+
+// Writes a line to the local SD diagnostic log (IsoLog -> /octiso.log) from outside
+// this file, e.g. video playback stats. A no-op unless IsoLog_local.h is present.
+// Holds the ISO mutex so the log's SD writes don't interleave with streaming reads.
+void OctLog(const char* format, ...)
+{
+    char buffer[512];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    SCOPED_LOCK(GetIsoMutex());
+    IsoLog("%s", buffer);
 }
 
 std::string SYS_GetCurrentDirectoryPath()

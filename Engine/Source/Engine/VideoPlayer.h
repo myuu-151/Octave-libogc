@@ -41,8 +41,12 @@ public:
     void SetAudioEnabled(bool enabled);   // Applies the next time a video opens
 
     // On GameCube/Wii, output YUV frames that the GPU converts to RGB (fastest; only
-    // widgets can draw them). Otherwise frames are RGBA. Applies the next time a video opens.
+    // widgets can draw them). Otherwise frames are RGBA. Changing it reopens the video.
     void SetUseYuv(bool useYuv);
+
+    // Decoder timing and how much audio is queued ahead of playback. Returns false
+    // while no video is open.
+    bool GetStats(VideoStreamStats& outStats, float& outAudioBufferedMs);
 
 private:
 
@@ -62,6 +66,8 @@ private:
     TextureRef mTexture;
     VideoStream::Frame mDisplayedFrame;
     uint32_t mAudioStream = 0;
+    uint64_t mAudioSubmittedFrames = 0;     // Since open / last flush
+    uint64_t mLogUs = 0;                    // Last SD diagnostic log line (GameCube/Wii)
     std::vector<uint8_t> mAudioScratch;
 
     double mTime = 0.0;

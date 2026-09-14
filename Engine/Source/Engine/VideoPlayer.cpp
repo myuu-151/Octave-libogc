@@ -10,6 +10,11 @@
 #include "Graphics/Graphics.h"
 #include "System/System.h"
 
+#if PLATFORM_DOLPHIN
+// Local SD diagnostic log (System_Dolphin.cpp). A no-op unless the local logger is enabled.
+void OctLog(const char* format, ...);
+#endif
+
 // Longest step the playback clock takes in one tick (e.g. after a hitch).
 static constexpr double kMaxTickSeconds = 0.25;
 
@@ -80,6 +85,7 @@ void VideoPlayer::Update(VideoClip* clip)
         if (!mAudioScratch.empty())
         {
             AUD_QueueStreamData(mAudioStream, mAudioScratch.data(), uint32_t(mAudioScratch.size()));
+            mAudioSubmittedFrames += mAudioScratch.size() / (2 * clip->GetAudioNumChannels());
         }
 
         AUD_SetStreamVolume(mAudioStream, mVolume);
@@ -129,6 +135,8 @@ void VideoPlayer::Update(VideoClip* clip)
         }
     }
 
+    mStream->SetPlaybackTime(mTime);
+
     VideoStream::Frame frame;
     if (mStream->PopFrame(mTime, frame))
     {
@@ -153,6 +161,29 @@ void VideoPlayer::Update(VideoClip* clip)
         mStream->ReleaseFrame(frame);
 #endif
     }
+
+#if PLATFORM_DOLPHIN
+    // Once a second, log decoder timing and buffering to the SD diagnostic log.
+    if (mLogUs == 0 || nowUs - mLogUs >= 1000000)
+    {
+        mLogUs = nowUs;
+
+        VideoStreamStats stats;
+        float audioBufferedMs = 0.0f;
+        if (GetStats(stats, audioBufferedMs))
+        {
+            OctLog("VIDEO t=%.2f read=%.1fms decode=%.1fms decoded=%u late=%u failed=%u queued=%u audio=%.0fms",
+                mTime,
+                stats.mReadMs,
+                stats.mDecodeMs,
+                unsigned(stats.mDecodedFrames),
+                unsigned(stats.mLateFrames),
+                unsigned(stats.mFailedFrames),
+                unsigned(stats.mQueuedFrames),
+                audioBufferedMs);
+        }
+    }
+#endif
 
     if (mStream->IsEndOfStream() && mTime >= clip->GetDuration())
     {
@@ -330,6 +361,21 @@ bool VideoPlayer::Open(VideoClip* clip)
 
     mOpenClip = clip;
     mOpenRevision = clip->GetRevision();
+    mAudioSubmittedFrames = 0;
+
+#if PLATFORM_DOLPHIN
+    mLogUs = 0;
+    OctLog("VIDEO open %s %ux%u %.2ffps frames=%u maxRecord=%u audio=%uHz x%u format=%s",
+        clip->GetName().c_str(),
+        unsigned(clip->GetWidth()),
+        unsigned(clip->GetHeight()),
+        clip->GetFrameRate(),
+        unsigned(clip->GetNumFrames()),
+        unsigned(clip->GetMaxRecordSize()),
+        unsigned(clip->GetAudioSampleRate()),
+        unsigned(clip->GetAudioNumChannels()),
+        (format == VideoFrameFormat::GxYuv420) ? "YUV" : "RGBA");
+#endif
     mTime = 0.0;
     mAudioStartTime = 0.0;
     mLastAudioPlayed = 0;
@@ -379,6 +425,7 @@ void VideoPlayer::SeekInternal(double seconds)
 
     mTime = mStream->Seek(seconds);
     mAudioStartTime = mTime;
+    mAudioSubmittedFrames = 0;
     mLastAudioPlayed = 0;
     mAudioActiveUs = 0;
     mClockRunning = false;
@@ -398,4 +445,24 @@ void VideoPlayer::ReleaseDisplayedFrame()
     }
 
     mDisplayedFrame = VideoStream::Frame();
+}
+
+bool VideoPlayer::GetStats(VideoStreamStats& outStats, float& outAudioBufferedMs)
+{
+    if (mStream == nullptr || mOpenClip == nullptr)
+    {
+        return false;
+    }
+
+    outStats = mStream->GetStats();
+    outAudioBufferedMs = 0.0f;
+
+    if (mAudioStream != 0 && mOpenClip->GetAudioSampleRate() > 0)
+    {
+        const uint64_t played = AUD_GetStreamPlayedFrames(mAudioStream);
+        const uint64_t buffered = (mAudioSubmittedFrames > played) ? (mAudioSubmittedFrames - played) : 0;
+        outAudioBufferedMs = float(buffered * 1000.0 / mOpenClip->GetAudioSampleRate());
+    }
+
+    return true;
 }

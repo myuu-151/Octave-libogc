@@ -2,10 +2,14 @@
 
 #include "Assets/VideoClip.h"
 #include "Assets/Texture.h"
+#include "Nodes/Widgets/Text.h"
 #include "Renderer.h"
 #include "Log.h"
 
 #include "Graphics/Graphics.h"
+#include "System/System.h"
+
+#include <cstdio>
 
 #if EDITOR
 #include "EditorState.h"
@@ -53,6 +57,9 @@ void VideoQuad::Destroy()
 {
     StopVideo();
 
+    // Children are destroyed along with this node.
+    mStatsText = nullptr;
+
     Quad::Destroy();
 }
 
@@ -69,6 +76,7 @@ void VideoQuad::Start()
 void VideoQuad::Stop()
 {
     StopVideo();
+    RemoveStatsOverlay();
 
     Quad::Stop();
 }
@@ -107,6 +115,7 @@ void VideoQuad::GatherProperties(std::vector<Property>& outProps)
     outProps.push_back(Property(DatumType::Float, "Volume", this, &mVolume));
     outProps.push_back(Property(DatumType::Bool, "Fill Screen", this, &mFillScreen));
     outProps.push_back(Property(DatumType::Bool, "GPU Color Conversion", this, &mGpuColorConversion));
+    outProps.push_back(Property(DatumType::Bool, "Show Stats", this, &mShowStats));
 }
 
 void VideoQuad::PreRender()
@@ -167,6 +176,69 @@ void VideoQuad::TickCommon()
     mPlayer.Update(GetVideoClip());
     mPlaying = mPlayer.IsPlaying();
     ApplyVideoTexture();
+    UpdateStatsOverlay();
+}
+
+void VideoQuad::UpdateStatsOverlay()
+{
+    if (!mShowStats)
+    {
+        RemoveStatsOverlay();
+        return;
+    }
+
+    if (mStatsText == nullptr)
+    {
+        mStatsText = CreateChild<Text>("VideoStats");
+        mStatsText->SetTransient(true);
+        mStatsText->SetPosition(8.0f, 8.0f);
+        mStatsText->SetDimensions(480.0f, 96.0f);
+        mStatsText->SetTextSize(16.0f);
+        mStatsText->SetColor(glm::vec4(1.0f, 1.0f, 0.0f, 1.0f));
+        mStatsUpdateUs = 0;
+    }
+
+    // A few updates a second is plenty, and keeps the text from churning.
+    const uint64_t nowUs = SYS_GetTimeMicroseconds();
+    if (mStatsUpdateUs != 0 && nowUs - mStatsUpdateUs < 250000)
+    {
+        return;
+    }
+    mStatsUpdateUs = nowUs;
+
+    char buffer[256];
+    VideoStreamStats stats;
+    float audioBufferedMs = 0.0f;
+
+    if (mPlayer.GetStats(stats, audioBufferedMs))
+    {
+        snprintf(buffer, sizeof(buffer),
+            "read %.1f ms   decode %.1f ms\n"
+            "decoded %u   late %u   failed %u\n"
+            "queued %u   audio buffered %.0f ms",
+            stats.mReadMs,
+            stats.mDecodeMs,
+            unsigned(stats.mDecodedFrames),
+            unsigned(stats.mLateFrames),
+            unsigned(stats.mFailedFrames),
+            unsigned(stats.mQueuedFrames),
+            audioBufferedMs);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "no video open");
+    }
+
+    mStatsText->SetText(buffer);
+}
+
+void VideoQuad::RemoveStatsOverlay()
+{
+    if (mStatsText != nullptr)
+    {
+        mStatsText->Doom();
+        mStatsText = nullptr;
+    }
 }
 
 void VideoQuad::SyncPlayerSettings()
@@ -292,4 +364,14 @@ void VideoQuad::SetFillScreen(bool fillScreen)
 bool VideoQuad::GetFillScreen() const
 {
     return mFillScreen;
+}
+
+void VideoQuad::SetShowStats(bool showStats)
+{
+    mShowStats = showStats;
+}
+
+bool VideoQuad::GetShowStats() const
+{
+    return mShowStats;
 }
