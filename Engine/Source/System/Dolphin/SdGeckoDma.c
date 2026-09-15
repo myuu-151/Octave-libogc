@@ -1294,7 +1294,7 @@ static s32 __card_readSectors(s32 drv_no,u32 sector_no,u32 num_sectors,void *buf
 	return ret;
 }
 
-static s32 __card_writeSectors(s32 drv_no,u32 sector_no,u32 num_sectors,const void *buf)
+static s32 __card_writeSectorsAt(s32 drv_no,u32 sector_no,u32 num_sectors,const void *buf)
 {
 	u32 i;
 	s32 ret;
@@ -1339,6 +1339,22 @@ static s32 __card_writeSectors(s32 drv_no,u32 sector_no,u32 num_sectors,const vo
 	if((ret=__card_multiwritestop(drv_no))!=0) return ret;
 	if((ret=__card_sendcmd(drv_no,0x0D,NULL))!=0) return ret;
 	return __card_response2(drv_no);
+}
+
+// Writes run at the stock 13.5 MHz clock, like libogc's driver: on the user's passive
+// adapter, reads were fine at 27 MHz but written files (the SD log) never landed.
+static s32 __card_writeSectors(s32 drv_no,u32 sector_no,u32 num_sectors,const void *buf)
+{
+	s32 ret;
+	u32 freq;
+
+	if(drv_no<0 || drv_no>=MAX_DRIVE) return CARDIO_ERROR_NOCARD;
+
+	freq = _ioCardFreq[drv_no];
+	_ioCardFreq[drv_no] = SAFE_FREQ;
+	ret = __card_writeSectorsAt(drv_no,sector_no,num_sectors,buf);
+	if(_ioFlag[drv_no]==INITIALIZED) _ioCardFreq[drv_no] = freq;
+	return ret;
 }
 
 static s32 __card_doUnmount(s32 drv_no)
