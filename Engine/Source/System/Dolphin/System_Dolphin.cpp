@@ -192,6 +192,11 @@ static int       sIsoMode = ISO_NONE;
 // (no SYS_Report), so it no longer overwrites the RTC counter. Leave 0 for shipping builds.
 #define OCT_FORCE_DVD 0
 
+// Test switch: 1 = SD only. If no ISO is found on the SD, don't fall back to the disc
+// drive -- for testing the SD path in Dolphin with an emulated SD adapter, where the
+// hybrid build would otherwise pick the emulated disc. Leave 0 for shipping builds.
+#define OCT_FORCE_SD 0
+
 static bool IsoMounted() { return sIsoMode != ISO_NONE; }
 
 // ---- DVD transport (physical disc) ----------------------------------------
@@ -443,6 +448,10 @@ static void IsoLocate()
     //    retries left the engine's default assets (meshes/fonts) unresolved when the
     //    renderer needed them -> null derefs / DSI crashes on a disc boot. On an SD rig the
     //    SD open above succeeds first, so we never touch the drive here.
+#if OCT_FORCE_SD
+    IsoLog("ISO: no SD image (OCT_FORCE_SD: not trying the disc)");
+    return;
+#endif
     IsoLog("ISO: no SD image -- reading the disc via the DI transport");
     IsoOpenDVD();
 }
@@ -575,7 +584,15 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
                 uint32_t alignedLen = ((uint32_t)fileSize + 31u) & ~31u;
                 outData = (char*)memalign(32, alignedLen);
                 outSize = uint32_t(fileSize);
-                if (outData != nullptr && OctDvdReadAligned(ent.offset, outData, alignedLen))
+                bool read = false;
+                if (outData != nullptr)
+                {
+                    // Serialize with IsoReadRaw: the DI reader is shared with other threads
+                    // (async loads, video and game streams reading off the disc).
+                    SCOPED_LOCK(GetIsoMutex());
+                    read = OctDvdReadAligned(ent.offset, outData, alignedLen);
+                }
+                if (read)
                     return;
                 if (outData != nullptr) { free(outData); outData = nullptr; outSize = 0; }
             }

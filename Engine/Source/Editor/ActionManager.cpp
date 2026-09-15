@@ -490,6 +490,17 @@ void ActionManager::BuildData(Platform platform, bool embedded)
     const std::string& projectName = engineState->mProjectName;
     bool useRomfs = (platform == Platform::N3DS) && embedded;
 
+    // A code-only project that carries its own game code (Source/ + Makefile_GCN) is
+    // compiled from its own folder, even when packaging from the prebuilt editor, instead
+    // of compiling the Standalone game. Projects without them package as before.
+    if (standalone && projectDir != "" &&
+        DoesDirExist((projectDir + "Source").c_str()) &&
+        SYS_DoesFileExist((projectDir + "Makefile_GCN").c_str(), false))
+    {
+        LogDebug("Project has its own Source/ and Makefile_GCN: building it instead of Standalone.");
+        standalone = false;
+    }
+
     std::vector<std::pair<AssetStub*, std::string> > embeddedAssets;
 
     if (projectDir == "")
