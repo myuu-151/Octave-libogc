@@ -193,8 +193,20 @@ void Renderer::UpdateSplash()
 
     if (t >= kSplashFadeEnd)
     {
-        mSplashActive = false;
         mSplashWidget->SetVisible(false);
+    }
+
+    // A couple of frames after it's hidden (nothing draws it any more), free the splash: the
+    // texture is large (~1.3 MB on GameCube) and nothing else uses it, so keeping it loaded for the
+    // whole game wastes memory the game needs.
+    if (t >= kSplashFadeEnd + 2.0f * kSplashStep)
+    {
+        mSplashActive = false;
+        mSplashWidget->SetTexture(nullptr);
+        mSplashWidget->Destroy();
+        mSplashWidget = nullptr;
+        mSplashTexture = nullptr;
+        UnloadAsset("T_OctaveSplash");
     }
 }
 
