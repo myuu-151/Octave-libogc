@@ -157,8 +157,8 @@ struct PcmStream
     int32_t  volume = MID_VOLUME;
     uint8_t* buf[AUD_PCM_STREAM_BUFFERS] = { nullptr, nullptr, nullptr };
     uint32_t bufCapacity = 0;
-    // FIFO of queued PCM not yet handed to ASND. One buffer allocated when the stream opens (not a
-    // growing std::vector): on the GameCube a vector reallocation that couldn't find a big enough
+    // FIFO of queued PCM not yet handed to ASND, in the slot's kept buffer (see PcmSlotMemory), not
+    // a growing std::vector: on the GameCube a vector reallocation that couldn't find a big enough
     // block threw bad_alloc, which without exceptions aborts, and libogc's abort loops forever.
     uint8_t* pending = nullptr;
     uint32_t pendingCapacity = 0;
@@ -168,6 +168,18 @@ struct PcmStream
 };
 
 static PcmStream sPcmStreams[AUD_MAX_PCM_STREAMS];
+
+// Memory each stream slot keeps across close and open. Games open and close streams often (a sound
+// each time the player does something); freeing and re-allocating these blocks every time fragmented
+// the GameCube's small heap until a stream couldn't open at all, with plenty of memory free in total.
+struct PcmSlotMemory
+{
+    uint8_t* buf[AUD_PCM_STREAM_BUFFERS] = { nullptr, nullptr, nullptr };
+    uint32_t bufAlloc = 0;
+    uint8_t* pending = nullptr;
+    uint32_t pendingAlloc = 0;
+};
+static PcmSlotMemory sPcmSlotMemory[AUD_MAX_PCM_STREAMS];
 
 static PcmStream* GetPcmStream(uint32_t streamId)
 {
@@ -249,6 +261,16 @@ void AUD_Shutdown()
     {
         if (sPcmStreams[i].active)
             AUD_CloseStream(i + 1);
+    }
+
+    for (PcmSlotMemory& mem : sPcmSlotMemory)
+    {
+        for (uint32_t b = 0; b < AUD_PCM_STREAM_BUFFERS; ++b)
+        {
+            if (mem.buf[b]) free(mem.buf[b]);
+        }
+        if (mem.pending) free(mem.pending);
+        mem = PcmSlotMemory();
     }
 
     ASND_End();
@@ -478,30 +500,45 @@ uint32_t AUD_OpenStream(uint32_t sampleRate, uint32_t numChannels)
         s.bufCapacity -= s.bufCapacity % s.frameBytes;
 
         uint32_t allocSize = (s.bufCapacity + 31) & ~31u;
+        PcmSlotMemory& mem = sPcmSlotMemory[i];
         bool allocated = true;
 
-        for (uint32_t b = 0; b < AUD_PCM_STREAM_BUFFERS; ++b)
+        // Reuse the slot's buffers when they're big enough.
+        if (mem.bufAlloc < allocSize)
         {
-            s.buf[b] = (uint8_t*)memalign(32, allocSize);
-            allocated = allocated && (s.buf[b] != nullptr);
+            for (uint32_t b = 0; b < AUD_PCM_STREAM_BUFFERS; ++b)
+            {
+                if (mem.buf[b]) free(mem.buf[b]);
+                mem.buf[b] = (uint8_t*)memalign(32, allocSize);
+                allocated = allocated && (mem.buf[b] != nullptr);
+            }
+            mem.bufAlloc = allocated ? allocSize : 0;
         }
 
-        // Room for 2 s of queued audio up front, so queueing doesn't allocate.
-        s.pendingCapacity = sampleRate * s.frameBytes * 2;
-        s.pending = (uint8_t*)malloc(s.pendingCapacity);
-        allocated = allocated && (s.pending != nullptr);
+        // Room for 1 s of queued audio up front (more than a game streaming from disc keeps
+        // ahead), so queueing doesn't allocate; it grows if a game queues more.
+        const uint32_t pendingWanted = sampleRate * s.frameBytes;
+        if (allocated && mem.pendingAlloc < pendingWanted)
+        {
+            if (mem.pending) free(mem.pending);
+            mem.pending = (uint8_t*)malloc(pendingWanted);
+            mem.pendingAlloc = (mem.pending != nullptr) ? pendingWanted : 0;
+            allocated = (mem.pending != nullptr);
+        }
 
         if (!allocated)
         {
             LogError("AUD_OpenStream: failed to allocate stream buffers.");
-            for (uint32_t b = 0; b < AUD_PCM_STREAM_BUFFERS; ++b)
-            {
-                if (s.buf[b]) free(s.buf[b]);
-            }
-            if (s.pending) free(s.pending);
             s = PcmStream();
             return 0;
         }
+
+        for (uint32_t b = 0; b < AUD_PCM_STREAM_BUFFERS; ++b)
+        {
+            s.buf[b] = mem.buf[b];
+        }
+        s.pending = mem.pending;
+        s.pendingCapacity = mem.pendingAlloc;
 
         s.active = true;
         return i + 1;
@@ -518,12 +555,7 @@ void AUD_CloseStream(uint32_t streamId)
 
     ASND_StopVoice(s->voice);
 
-    for (uint32_t b = 0; b < AUD_PCM_STREAM_BUFFERS; ++b)
-    {
-        if (s->buf[b]) free(s->buf[b]);
-    }
-    if (s->pending) free(s->pending);
-
+    // The slot keeps its buffers for the next stream (see PcmSlotMemory).
     *s = PcmStream();
 }
 
@@ -555,6 +587,8 @@ void AUD_QueueStreamData(uint32_t streamId, const uint8_t* data, uint32_t size)
         }
         s->pending = grown;
         s->pendingCapacity = needed;
+        sPcmSlotMemory[streamId - 1].pending = grown;
+        sPcmSlotMemory[streamId - 1].pendingAlloc = needed;
     }
 
     memcpy(s->pending + s->pendingSize, data, size);
