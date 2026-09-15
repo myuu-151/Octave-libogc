@@ -142,7 +142,7 @@ static void StreamCallback(s32 voice) { (void)voice; }
 // per-voice tick counter, which only advances while the voice has data.
 // ---------------------------------------------------------------------------
 
-#define AUD_MAX_PCM_STREAMS 4
+#define AUD_MAX_PCM_STREAMS 8
 #define AUD_PCM_STREAM_BUFFERS 3
 
 struct PcmStream

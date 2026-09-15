@@ -297,14 +297,20 @@ static s32 __exi_unlock(s32 chn,s32 dev)
 	return 1;
 }
 
+// Interrupts stay off across the lock attempt and the sleep (as in __card_dmaread's DMA wait).
+// Otherwise, when another thread owns the channel, it can unlock and broadcast between a
+// failed EXI_Lock and LWP_ThreadSleep: the wake-up is lost and this thread sleeps forever.
+// That hung a low-priority thread reading the SD while the main thread also used it.
 static void __exi_wait(s32 drv_no)
 {
-	u32 ret;
+	u32 ret,level;
 
+	_CPU_ISR_Disable(level);
 	do {
 		if((ret=EXI_Lock(drv_no,EXI_DEVICE_0,__exi_unlock))==1) break;
 		LWP_ThreadSleep(_ioEXILock[drv_no]);
 	} while(ret==0);
+	_CPU_ISR_Restore(level);
 }
 
 static s32 __dma_done(s32 chn,s32 dev)

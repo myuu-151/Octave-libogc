@@ -712,6 +712,19 @@ void OctLog(const char* format, ...)
     IsoLog("%s", buffer);
 }
 
+// Serialize file I/O with the engine's ISO reads and log writes. For game code that reads the SD
+// (e.g. the ISO through its own FILE handles) from another thread: the SD driver keeps shared
+// per-card state, and overlapping use from two threads hangs it.
+void OctLockFileIo()
+{
+    SYS_LockMutex(GetIsoMutex());
+}
+
+void OctUnlockFileIo()
+{
+    SYS_UnlockMutex(GetIsoMutex());
+}
+
 std::string SYS_GetCurrentDirectoryPath()
 {
     char path[MAX_PATH_SIZE] = {};
