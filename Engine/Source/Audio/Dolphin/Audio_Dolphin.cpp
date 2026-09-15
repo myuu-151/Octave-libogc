@@ -142,6 +142,10 @@ static void StreamCallback(s32 voice) { (void)voice; }
 // per-voice tick counter, which only advances while the voice has data.
 // ---------------------------------------------------------------------------
 
+// SD diagnostic log (System_Dolphin.cpp; a no-op unless the local logger is enabled). Stream memory
+// problems also go there, since LogError only reaches the screen.
+void OctLog(const char* format, ...);
+
 #define AUD_MAX_PCM_STREAMS 8
 #define AUD_PCM_STREAM_BUFFERS 3
 
@@ -165,6 +169,7 @@ struct PcmStream
     uint32_t pendingSize = 0;           // bytes in use, from the start of the buffer
     uint32_t pendingHead = 0;           // bytes already consumed
     uint32_t tickBase = 0;              // ASND tick counter when the voice (re)started
+    uint64_t fedFrames = 0;             // frames handed to ASND since the voice (re)started
 };
 
 static PcmStream sPcmStreams[AUD_MAX_PCM_STREAMS];
@@ -198,6 +203,7 @@ static uint32_t PcmPendingBytes(const PcmStream& s)
 // Removes n bytes from the front of the FIFO. (The rest moves to the front on the next queue.)
 static void PcmConsume(PcmStream& s, uint32_t n)
 {
+    s.fedFrames += n / s.frameBytes;    // PcmConsume runs as data goes to ASND
     s.pendingHead += n;
 
     if (s.pendingHead >= s.pendingSize)
@@ -515,9 +521,11 @@ uint32_t AUD_OpenStream(uint32_t sampleRate, uint32_t numChannels)
             mem.bufAlloc = allocated ? allocSize : 0;
         }
 
-        // Room for 1 s of queued audio up front (more than a game streaming from disc keeps
-        // ahead), so queueing doesn't allocate; it grows if a game queues more.
-        const uint32_t pendingWanted = sampleRate * s.frameBytes;
+        // Room for 2 s of queued audio up front, so queueing doesn't allocate; it grows if a game
+        // queues more. 1 s wasn't enough: a game topping up at 1 s with 0.5 s chunks can have 1.5 s
+        // waiting, more when slow frames hold back feeding, and growing on a fragmented heap
+        // failed and dropped audio.
+        const uint32_t pendingWanted = sampleRate * s.frameBytes * 2;
         if (allocated && mem.pendingAlloc < pendingWanted)
         {
             if (mem.pending) free(mem.pending);
@@ -529,6 +537,8 @@ uint32_t AUD_OpenStream(uint32_t sampleRate, uint32_t numChannels)
         if (!allocated)
         {
             LogError("AUD_OpenStream: failed to allocate stream buffers.");
+            OctLog("AUD_OpenStream: failed to allocate stream buffers (slot %u, 3 x %u-byte buffers, %u-byte queue)",
+                   i + 1, allocSize, pendingWanted);
             s = PcmStream();
             return 0;
         }
@@ -582,9 +592,12 @@ void AUD_QueueStreamData(uint32_t streamId, const uint8_t* data, uint32_t size)
         if (grown == nullptr)
         {
             LogError("AUD_QueueStreamData: out of memory, dropped %u bytes.", size);
+            OctLog("AUD_QueueStreamData: out of memory, dropped %u bytes (stream %u, %u bytes waiting, %u-byte queue)",
+                   size, streamId, s->pendingSize, s->pendingCapacity);
             PcmFeed(*s);
             return;
         }
+        OctLog("AUD_QueueStreamData: stream %u queue grew from %u to %u bytes", streamId, s->pendingCapacity, needed);
         s->pending = grown;
         s->pendingCapacity = needed;
         sPcmSlotMemory[streamId - 1].pending = grown;
@@ -611,7 +624,11 @@ uint64_t AUD_GetStreamPlayedFrames(uint32_t streamId)
         s->tickBase = 0;    // ASND_SetVoice reset the counter
     }
 
-    return uint64_t(ticks - s->tickBase) * s->sampleRate / 48000;
+    // Never more than was handed to ASND. The tick count runs ahead of it while the voice starves
+    // (e.g. frames too slow to feed it), and a game topping up by the played count would then
+    // queue more and more until the queue overflowed and dropped audio.
+    const uint64_t tickFrames = uint64_t(ticks - s->tickBase) * s->sampleRate / 48000;
+    return glm::min(tickFrames, s->fedFrames);
 }
 
 void AUD_SetStreamPaused(uint32_t streamId, bool paused)
@@ -655,6 +672,7 @@ void AUD_FlushStream(uint32_t streamId)
     s->started = false;
     s->pendingSize = 0;
     s->pendingHead = 0;
+    s->fedFrames = 0;
 }
 
 #endif
