@@ -575,7 +575,11 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
                 fileSize = glm::min(fileSize, maxSize);
             }
 
-            IsoLog("H %s", path);
+            {
+                // The log writes to the SD: hold the file I/O lock, as other threads may be reading the card.
+                SCOPED_LOCK(GetIsoMutex());
+                IsoLog("H %s", path);
+            }
 
             if (sIsoMode == ISO_DVD && (ent.offset & 31u) == 0)
             {
@@ -608,7 +612,8 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
         }
     }
 
-    // Fall back to a loose file on the SD.
+    // Fall back to a loose file on the SD (under the file I/O lock, like every other SD access).
+    SCOPED_LOCK(GetIsoMutex());
     FILE* file = fopen(path, "rb");
 
     if (file != nullptr)
@@ -788,7 +793,10 @@ void SYS_OpenDirectory(const std::string& dirPath, DirEntry& outDirEntry)
         en->index = 0;
         if (IsoListDir(dirPath.c_str(), en->entries))
         {
-            IsoLog("ISO dir: %s -> %u entries", dirPath.c_str(), (uint32_t)en->entries.size());
+            {
+                SCOPED_LOCK(GetIsoMutex());
+                IsoLog("ISO dir: %s -> %u entries", dirPath.c_str(), (uint32_t)en->entries.size());
+            }
             outDirEntry.mIsoEnum = en;
             outDirEntry.mDir = nullptr;
             strncpy(outDirEntry.mFilename, en->entries[0].first.c_str(), MAX_PATH_SIZE);

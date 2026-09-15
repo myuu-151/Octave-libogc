@@ -157,8 +157,13 @@ struct PcmStream
     int32_t  volume = MID_VOLUME;
     uint8_t* buf[AUD_PCM_STREAM_BUFFERS] = { nullptr, nullptr, nullptr };
     uint32_t bufCapacity = 0;
-    std::vector<uint8_t> pending;
-    uint32_t pendingHead = 0;
+    // FIFO of queued PCM not yet handed to ASND. One buffer allocated when the stream opens (not a
+    // growing std::vector): on the GameCube a vector reallocation that couldn't find a big enough
+    // block threw bad_alloc, which without exceptions aborts, and libogc's abort loops forever.
+    uint8_t* pending = nullptr;
+    uint32_t pendingCapacity = 0;
+    uint32_t pendingSize = 0;           // bytes in use, from the start of the buffer
+    uint32_t pendingHead = 0;           // bytes already consumed
     uint32_t tickBase = 0;              // ASND tick counter when the voice (re)started
 };
 
@@ -175,22 +180,17 @@ static PcmStream* GetPcmStream(uint32_t streamId)
 
 static uint32_t PcmPendingBytes(const PcmStream& s)
 {
-    return uint32_t(s.pending.size()) - s.pendingHead;
+    return s.pendingSize - s.pendingHead;
 }
 
-// Removes n bytes from the front of the FIFO.
+// Removes n bytes from the front of the FIFO. (The rest moves to the front on the next queue.)
 static void PcmConsume(PcmStream& s, uint32_t n)
 {
     s.pendingHead += n;
 
-    if (s.pendingHead >= s.pending.size())
+    if (s.pendingHead >= s.pendingSize)
     {
-        s.pending.clear();
-        s.pendingHead = 0;
-    }
-    else if (s.pendingHead > 64 * 1024)
-    {
-        s.pending.erase(s.pending.begin(), s.pending.begin() + s.pendingHead);
+        s.pendingSize = 0;
         s.pendingHead = 0;
     }
 }
@@ -203,7 +203,7 @@ static void PcmFeed(PcmStream& s)
     if (s.paused || PcmPendingBytes(s) < s.bufCapacity)
         return;
 
-    const uint8_t* src = s.pending.data() + s.pendingHead;
+    const uint8_t* src = s.pending + s.pendingHead;
 
     if (!s.started)
     {
@@ -486,6 +486,11 @@ uint32_t AUD_OpenStream(uint32_t sampleRate, uint32_t numChannels)
             allocated = allocated && (s.buf[b] != nullptr);
         }
 
+        // Room for 2 s of queued audio up front, so queueing doesn't allocate.
+        s.pendingCapacity = sampleRate * s.frameBytes * 2;
+        s.pending = (uint8_t*)malloc(s.pendingCapacity);
+        allocated = allocated && (s.pending != nullptr);
+
         if (!allocated)
         {
             LogError("AUD_OpenStream: failed to allocate stream buffers.");
@@ -493,6 +498,7 @@ uint32_t AUD_OpenStream(uint32_t sampleRate, uint32_t numChannels)
             {
                 if (s.buf[b]) free(s.buf[b]);
             }
+            if (s.pending) free(s.pending);
             s = PcmStream();
             return 0;
         }
@@ -516,6 +522,7 @@ void AUD_CloseStream(uint32_t streamId)
     {
         if (s->buf[b]) free(s->buf[b]);
     }
+    if (s->pending) free(s->pending);
 
     *s = PcmStream();
 }
@@ -526,7 +533,33 @@ void AUD_QueueStreamData(uint32_t streamId, const uint8_t* data, uint32_t size)
     if (s == nullptr || data == nullptr || size == 0)
         return;
 
-    s->pending.insert(s->pending.end(), data, data + size);
+    // Move what hasn't been handed to ASND yet to the front, then append.
+    if (s->pendingHead > 0)
+    {
+        memmove(s->pending, s->pending + s->pendingHead, s->pendingSize - s->pendingHead);
+        s->pendingSize -= s->pendingHead;
+        s->pendingHead = 0;
+    }
+
+    if (size > s->pendingCapacity - s->pendingSize)
+    {
+        // More queued than the buffer holds: grow it, or drop this data if there's no memory
+        // (a gap in the sound, instead of a hang).
+        const uint32_t needed = s->pendingSize + size;
+        uint8_t* grown = (uint8_t*)realloc(s->pending, needed);
+        if (grown == nullptr)
+        {
+            LogError("AUD_QueueStreamData: out of memory, dropped %u bytes.", size);
+            PcmFeed(*s);
+            return;
+        }
+        s->pending = grown;
+        s->pendingCapacity = needed;
+    }
+
+    memcpy(s->pending + s->pendingSize, data, size);
+    s->pendingSize += size;
+
     PcmFeed(*s);
 }
 
@@ -586,7 +619,7 @@ void AUD_FlushStream(uint32_t streamId)
 
     ASND_StopVoice(s->voice);
     s->started = false;
-    s->pending.clear();
+    s->pendingSize = 0;
     s->pendingHead = 0;
 }
 
