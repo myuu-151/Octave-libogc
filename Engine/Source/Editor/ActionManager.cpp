@@ -1003,7 +1003,10 @@ void ActionManager::BuildData(Platform platform, bool embedded)
         // the IPL show it. Prefer a project-supplied banner, else the engine default.
         std::string bannerDst = packagedDir + "opening.bnr";
         std::string bannerSrc = projectDir + "opening.bnr";
-        if (!SYS_DoesFileExist(bannerSrc.c_str(), false))
+        // A project that ships its own banner has already written the name it wants into it; only
+        // the engine's generic default needs the project name stamped over it below.
+        const bool projectBanner = SYS_DoesFileExist(bannerSrc.c_str(), false);
+        if (!projectBanner)
             bannerSrc = octaveDirectory + "Standalone/Tools/opening.bnr";
 
         if (SYS_DoesFileExist(bannerSrc.c_str(), false))
@@ -1014,14 +1017,20 @@ void ActionManager::BuildData(Platform platform, bool embedded)
             {
                 // Stamp the project name into the BNR1 game-name fields (short name
                 // @0x1820/0x20, long title @0x1860/0x40) so the disc shows this
-                // project's name under the icon instead of a generic one.
+                // project's name under the icon instead of a generic one. Only the engine's
+                // default banner gets this: a project-supplied opening.bnr carries the title its
+                // author chose, which is usually the game's real name rather than the project's
+                // folder name, and stamping over it threw that away on every package.
                 auto stampName = [&](uint32_t off, uint32_t cap)
                 {
                     for (uint32_t i = 0; i < cap; ++i)
                         banner[off + i] = (i < projectName.size() && i + 1 < cap) ? (uint8_t)projectName[i] : 0;
                 };
-                stampName(0x1820, 0x20);
-                stampName(0x1860, 0x40);
+                if (!projectBanner)
+                {
+                    stampName(0x1820, 0x20);
+                    stampName(0x1860, 0x40);
+                }
 
                 FILE* bf = fopen(bannerDst.c_str(), "wb");
                 if (bf) { fwrite(banner.data(), 1, bsz, bf); fclose(bf);
