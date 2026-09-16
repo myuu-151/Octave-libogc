@@ -100,6 +100,17 @@ Instructions for building from source below.
    - Android NDK (Side by side): 25.2.9519653
    - CMake: 3.22.1
 
+## Video (ffmpeg)
+
+Video import and playback need **ffmpeg**: the editor cooks a video into a `VideoClip`
+(baseline JPEG frames plus 16-bit PCM audio) with `ffmpeg`, reading its properties with
+`ffprobe`.
+
+The release zip ships them in `External/ffmpeg/bin/`. Building from a source checkout, put
+`ffmpeg.exe` and `ffprobe.exe` there yourself, from an LGPL build such as
+[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases) (`win64-lgpl`).
+Alternatively set `OCTAVE_FFMPEG` / `OCTAVE_FFPROBE` to their paths, or have them on your `PATH`.
+
 ## CMake Support
 
 CMake support is currently a work-in-progress, and only Linux support has been implemented and tested. If you want to try building with CMake, here are some tips:
