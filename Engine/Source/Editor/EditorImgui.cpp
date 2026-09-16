@@ -2305,27 +2305,10 @@ static void DrawPackageMenu()
 
     //if (ImGui::BeginPopup("PackagePopup"))
     //{
-#if PLATFORM_WINDOWS
-    if (ImGui::MenuItem("Windows"))
-        am->BuildData(Platform::Windows, false);
-#elif PLATFORM_LINUX
-    if (ImGui::MenuItem("Linux"))
-        am->BuildData(Platform::Linux, false);
-#endif
-    if (ImGui::MenuItem("Android"))
-        am->BuildData(Platform::Android, false);
+    // This fork targets libogc's GameCube: assets are packaged into the disc image and read from
+    // the SD card or the disc, so that's the only packaging option it offers.
     if (ImGui::MenuItem("GameCube (SD/DVD)"))
         am->BuildData(Platform::GameCube, false);
-    if (ImGui::MenuItem("Wii"))
-        am->BuildData(Platform::Wii, false);
-    if (ImGui::MenuItem("3DS"))
-        am->BuildData(Platform::N3DS, false);
-    if (ImGui::MenuItem("GameCube Embedded"))
-        am->BuildData(Platform::GameCube, true);
-    if (ImGui::MenuItem("Wii Embedded"))
-        am->BuildData(Platform::Wii, true);
-    if (ImGui::MenuItem("3DS Embedded"))
-        am->BuildData(Platform::N3DS, true);
 
     //    ImGui::EndPopup();
     //}
