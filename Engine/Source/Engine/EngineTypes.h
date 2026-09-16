@@ -278,6 +278,10 @@ struct EngineConfig
     bool mShowSplash = true;   // "Powered by Octave" boot splash (packaged games)
 
     int32_t mLqMaxTextureSize = 0;
+    // Steps every console texture down by (factor - 1) halvings at cook time: 2 takes 512 to 256
+    // and 256 to 128. A texture's own LQ Downsample Factor still wins if it asks for more, and
+    // Force High Quality exempts it entirely. 1 = off.
+    int32_t mLqDownsampleFactor = 1;
     bool mLqEnableMipMaps = true;
 
     std::string mProjectPath;

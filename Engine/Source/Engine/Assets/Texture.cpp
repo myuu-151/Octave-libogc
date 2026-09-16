@@ -151,6 +151,12 @@ void CookTexture(
         int32_t downsampleFactor = texture->GetLowQualityDownsampleFactor();
         int32_t consoleMaxTextureSize = GetEngineConfig()->mLqMaxTextureSize;
 
+        // A project can step every texture down a level at once with LqDownsampleFactor in
+        // Config.ini, rather than setting the property on each texture by hand. A texture that
+        // asks for more reduction in its own property still wins; Force High Quality still
+        // exempts it entirely, since that check gates the whole block below.
+        downsampleFactor = glm::max(downsampleFactor, GetEngineConfig()->mLqDownsampleFactor);
+
         if (!forceHq && (consoleMaxTextureSize != 0 || downsampleFactor > 1))
         {
             if (downsampleFactor > 1)
@@ -171,19 +177,25 @@ void CookTexture(
                 texHeight = glm::min(texHeight,consoleMaxTextureSize);
             }
 
+            // Without a max size there is no upper bound to clamp against. Clamping to
+            // consoleMaxTextureSize when it is 0 gives glm::clamp the range [1, 0], which returns
+            // 0 and collapses the texture to nothing -- reachable whenever a downsample factor is
+            // used on a non-square texture without also setting LqMaxTextureSize.
+            const uint32_t maxDim = (consoleMaxTextureSize > 0) ? uint32_t(consoleMaxTextureSize) : 0xFFFFFFFFu;
+
             if (nonSquare)
             {
                 if (texWidth > texHeight)
                 {
                     float texHeightFloat = texWidth * (1 / whRatio);
                     texHeight = uint32_t(texHeightFloat + 0.5f);
-                    texHeight = glm::clamp<uint32_t>(texHeight, 1, consoleMaxTextureSize);
+                    texHeight = glm::clamp<uint32_t>(texHeight, 1, maxDim);
                 }
                 else
                 {
                     float texWidthFloat = texHeight * whRatio;
                     texWidth = uint32_t(texWidthFloat + 0.5f);
-                    texWidth = glm::clamp<uint32_t>(texWidth, 1, consoleMaxTextureSize);
+                    texWidth = glm::clamp<uint32_t>(texWidth, 1, maxDim);
                 }
             }
         }

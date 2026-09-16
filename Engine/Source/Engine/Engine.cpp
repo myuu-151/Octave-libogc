@@ -1101,6 +1101,7 @@ void WriteEngineConfig(std::string path)
         fprintf(configIni, "LogToFile=%d\n", sEngineConfig.mLogToFile);
 
         fprintf(configIni, "LqMaxTextureSize=%d\n", sEngineConfig.mLqMaxTextureSize);
+        fprintf(configIni, "LqDownsampleFactor=%d\n", sEngineConfig.mLqDownsampleFactor);
         fprintf(configIni, "LqEnableMipMaps=%d\n", sEngineConfig.mLqEnableMipMaps);
 
         fprintf(configIni, "EditorInterfaceScale=%f\n", sEngineConfig.mEditorInterfaceScale);
@@ -1208,6 +1209,8 @@ void ReadEngineConfig(std::string path)
 
             else if (keyStr == "LqMaxTextureSize")
                 sEngineConfig.mLqMaxTextureSize = atoi(value);
+            else if (keyStr == "LqDownsampleFactor")
+                sEngineConfig.mLqDownsampleFactor = atoi(value);
             else if (keyStr == "LqEnableMipMaps")
                 sEngineConfig.mLqEnableMipMaps = strToBool(value);
 

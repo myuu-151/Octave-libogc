@@ -4023,6 +4023,43 @@ static void DrawViewportPanel()
             ImGui::EndMenu();
         }
 
+        // Cook-time optimisation settings, and the home for any that follow. The texture ones
+        // below are gated in Texture.cpp on GameCube / Wii / 3DS, so they do not touch a desktop
+        // build -- which the menu name no longer says, hence the note inside it. All of these
+        // were previously reachable only by hand-editing Config.ini.
+        if (ImGui::BeginMenu("Optimization"))
+        {
+            static int32_t sLqDownsample = GetEngineConfig()->mLqDownsampleFactor;
+            static int32_t sLqMaxSize = GetEngineConfig()->mLqMaxTextureSize;
+            static bool sLqMips = GetEngineConfig()->mLqEnableMipMaps;
+
+            ImGui::TextDisabled("GameCube / Wii / 3DS builds only");
+            ImGui::Separator();
+
+            ImGui::SliderInt("Step Down", &sLqDownsample, 1, 4);
+            ImGui::TextDisabled("1 = native, 2 halves every texture, 3 quarters it.");
+
+            ImGui::InputInt("Max Size", &sLqMaxSize, 0);
+            ImGui::TextDisabled("0 = no ceiling. Applied after the step down.");
+
+            ImGui::Checkbox("Mip Maps", &sLqMips);
+
+            ImGui::Separator();
+            if (ImGui::Button("Apply"))
+            {
+                // A texture's own LQ Downsample Factor still wins if it asks for more, and
+                // Force High Quality exempts it from both of these.
+                if (sLqDownsample < 1) { sLqDownsample = 1; }
+                if (sLqMaxSize < 0) { sLqMaxSize = 0; }
+
+                GetMutableEngineConfig()->mLqDownsampleFactor = sLqDownsample;
+                GetMutableEngineConfig()->mLqMaxTextureSize = sLqMaxSize;
+                GetMutableEngineConfig()->mLqEnableMipMaps = sLqMips;
+                WriteEngineConfig();
+            }
+            ImGui::EndMenu();
+        }
+
         ImGui::EndPopup();
     }
 
