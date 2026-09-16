@@ -4,7 +4,7 @@
 
 # Octave
 
-A 3D Game Engine for GameCube, Wii, 3DS, Windows, Linux, and Android
+3D Game Engine fork for GameCube specifically
 
 > **Why this fork?**
 > - Stays on the original **libogc** — upstream Octave now requires libogc2 and a third-party package repository.
