@@ -2,9 +2,9 @@
   <img src="OctaveLogo_128.png"/>
 </p>
 
-# Octave
+# Octave-libogc
 
-A 3D Game Engine fork continuing GameCube support
+Octave-libogc is a fork of the Octave 3D Game Engine that focuses exclusively on continued GameCube support   
 
 > **Why this fork?**
 > - Stays on the original **libogc** — upstream Octave now requires libogc2 and a third-party package repository.
