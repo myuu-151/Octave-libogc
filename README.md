@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="OctaveLogo_128.png"/>
+  <img src="OctaveBanner.png"/>
 </p>
 
  # Octave-libogc
