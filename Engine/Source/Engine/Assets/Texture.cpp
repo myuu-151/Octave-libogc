@@ -245,6 +245,17 @@ void CookTexture(
 
         PixelFormat format = texture->GetFormat();
 
+        // A project can force one colour format on every console texture with LqTextureFormat in
+        // Config.ini, rather than setting it per asset. Textures default to RGBA8, which is 32 bits
+        // a texel -- a single 512x512 would fill Flipper's 1 MB texture cache on its own -- so a
+        // project targeting this hardware almost always wants CMPR instead, at 4 bits.
+        // Force High Quality opts a texture out, as it does for the downsampling above.
+        const int32_t forcedFormat = GetEngineConfig()->mLqTextureFormat;
+        if (forcedFormat >= 0 && !texture->IsForcedHighQuality())
+        {
+            format = (PixelFormat)forcedFormat;
+        }
+
         // Alpha doesn't seem to be working with CMPR textures with gxtexconv, but I think
         // the CMPR does support 1 bit alpha. So I'm not sure what the problem is, but for now we can use a slightly
         // more compressed format for these.

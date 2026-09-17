@@ -4042,6 +4042,11 @@ static void DrawViewportPanel()
             ImGui::InputInt("Max Size", &sLqMaxSize, 0);
             ImGui::TextDisabled("0 = no ceiling. Applied after the step down.");
 
+            // Index 0 is "As Authored" (-1); the rest map onto PixelFormat by subtracting one.
+            static int32_t sLqFormatIdx = GetEngineConfig()->mLqTextureFormat + 1;
+            ImGui::Combo("Format", &sLqFormatIdx, "As Authored\0LA4\0RGB565\0RGBA8\0CMPR\0RGBA5551\0");
+            ImGui::TextDisabled("CMPR is 4 bits a texel, RGBA8 is 32.");
+
             ImGui::Checkbox("Mip Maps", &sLqMips);
 
             ImGui::Separator();
@@ -4054,6 +4059,7 @@ static void DrawViewportPanel()
 
                 GetMutableEngineConfig()->mLqDownsampleFactor = sLqDownsample;
                 GetMutableEngineConfig()->mLqMaxTextureSize = sLqMaxSize;
+                GetMutableEngineConfig()->mLqTextureFormat = sLqFormatIdx - 1;
                 GetMutableEngineConfig()->mLqEnableMipMaps = sLqMips;
                 WriteEngineConfig();
             }

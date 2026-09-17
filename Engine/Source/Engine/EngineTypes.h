@@ -282,6 +282,10 @@ struct EngineConfig
     // and 256 to 128. A texture's own LQ Downsample Factor still wins if it asks for more, and
     // Force High Quality exempts it entirely. 1 = off.
     int32_t mLqDownsampleFactor = 1;
+    // Forces a colour format on console texture cooks, overriding each texture's own. Values are
+    // PixelFormat: 0 LA4, 1 RGB565, 2 RGBA8, 3 CMPR, 4 RGBA5551. -1 leaves every texture as it was
+    // authored, and is the default. Force High Quality exempts a texture from this too.
+    int32_t mLqTextureFormat = -1;
     bool mLqEnableMipMaps = true;
 
     std::string mProjectPath;
