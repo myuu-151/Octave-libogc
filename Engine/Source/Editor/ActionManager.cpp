@@ -2277,6 +2277,133 @@ void ActionManager::ImportAsset()
     }
 }
 
+// Import the material a mesh uses, plus its base colour texture, and return it.
+//
+// Importing a mesh file through ImportAsset used to produce geometry and nothing else, so every
+// mesh landed on M_Default and the model came in untextured -- the material walk existed only
+// in ImportScene. This is the shared piece, so a plain mesh import brings its material with it.
+//
+// Deliberately narrower than the ImportScene path: one material, its base colour, no lights,
+// cameras or scene hierarchy. That is what a single-asset import means.
+static Material* ImportMeshMaterial(
+    const aiScene* scene,
+    uint32_t materialIndex,
+    const std::string& importDir,
+    const std::string& baseName,
+    AssetDir* destDir,
+    std::unordered_map<std::string, Texture*>& textureMap)
+{
+    if (scene == nullptr || materialIndex >= scene->mNumMaterials || destDir == nullptr)
+    {
+        return nullptr;
+    }
+
+    aiMaterial* aMaterial = scene->mMaterials[materialIndex];
+
+    std::string materialName = aMaterial->GetName().C_Str();
+    if (materialName.empty())
+    {
+        materialName = "Material" + std::to_string(materialIndex);
+    }
+
+    if (materialName.size() < 2 || materialName.substr(0, 2) != "M_")
+    {
+        materialName = std::string("M_") + baseName + std::string("_") + materialName;
+    }
+
+    // Reuse the material if this import already created it: a mesh file usually holds several
+    // meshes sharing one material, and each arrives here separately.
+    Material* existing = LoadAsset<Material>(materialName);
+    if (existing != nullptr)
+    {
+        return existing;
+    }
+
+    AssetStub* materialStub = EditorAddUniqueAsset(materialName.c_str(), destDir, MaterialLite::GetStaticType(), true);
+    if (materialStub == nullptr)
+    {
+        return nullptr;
+    }
+
+    MaterialLite* newMaterial = static_cast<MaterialLite*>(materialStub->mAsset);
+
+    // glTF 2.0 keeps albedo in pbrMetallicRoughness.baseColorTexture, which Assimp reports as
+    // aiTextureType_BASE_COLOR. OBJ, FBX and Collada use aiTextureType_DIFFUSE. Query the PBR
+    // slot first and fall back, so both eras import correctly.
+    aiTextureType baseTextureType = aiTextureType_BASE_COLOR;
+    uint32_t numBaseTextures = aMaterial->GetTextureCount(baseTextureType);
+
+    if (numBaseTextures == 0)
+    {
+        baseTextureType = aiTextureType_DIFFUSE;
+        numBaseTextures = aMaterial->GetTextureCount(baseTextureType);
+    }
+
+    numBaseTextures = glm::clamp(numBaseTextures, 0u, 4u);
+
+    for (uint32_t t = 0; t < numBaseTextures; ++t)
+    {
+        aiString path;
+        if (aMaterial->GetTexture(baseTextureType, t, &path) != aiReturn_SUCCESS)
+        {
+            continue;
+        }
+
+        std::string texturePath = path.C_Str();
+
+        // A leading '*' means the texture is embedded in the file rather than sitting beside
+        // it, which this path cannot resolve.
+        if (texturePath.size() > 1 && texturePath[0] == '*')
+        {
+            LogWarning("Skipping embedded texture: %s", texturePath.c_str());
+            continue;
+        }
+
+        Texture* textureToAssign = nullptr;
+
+        if (textureMap.find(texturePath) != textureMap.end())
+        {
+            textureToAssign = textureMap[texturePath];
+        }
+        else
+        {
+            std::string assetName = EditorGetAssetNameFromPath(texturePath);
+            if (assetName.size() >= 2 && strncmp(assetName.c_str(), "T_", 2) == 0)
+            {
+                assetName = assetName.substr(2);
+            }
+            assetName = std::string("T_") + baseName + std::string("_") + assetName;
+
+            textureToAssign = LoadAsset<Texture>(assetName);
+
+            if (textureToAssign == nullptr)
+            {
+                Asset* importedAsset = ActionManager::Get()->ImportAsset(importDir + texturePath);
+
+                if (importedAsset != nullptr && importedAsset->GetType() == Texture::GetStaticType())
+                {
+                    textureToAssign = (Texture*)importedAsset;
+                    AssetManager::Get()->RenameAsset(importedAsset, assetName);
+                    AssetManager::Get()->SaveAsset(assetName);
+                }
+            }
+
+            if (textureToAssign != nullptr)
+            {
+                textureMap.insert({ texturePath, textureToAssign });
+            }
+        }
+
+        if (textureToAssign != nullptr)
+        {
+            newMaterial->SetTexture(t, textureToAssign);
+        }
+    }
+
+    AssetManager::Get()->SaveAsset(*materialStub);
+    return newMaterial;
+}
+
 Asset* ActionManager::ImportAsset(const std::string& path)
 {
     Asset* retAsset = nullptr;
@@ -2401,6 +2528,29 @@ Asset* ActionManager::ImportAsset(const std::string& path)
         LogError("Failed to import Asset. Unrecognized source asset extension.");
     }
 
+    // Mesh files carry their materials with them. Read the scene once up front so each mesh
+    // created below can be given the material it actually references, instead of M_Default.
+    Assimp::Importer materialImporter;
+    const aiScene* materialScene = nullptr;
+    std::unordered_map<std::string, Texture*> importedTextureMap;
+    std::string materialImportDir = "./";
+    std::string materialBaseName = filename.substr(0, dotIndex);
+
+    if (extension == ".dae" ||
+        extension == ".fbx" ||
+        extension == ".glb" ||
+        extension == ".gltf" ||
+        extension == ".obj")
+    {
+        materialScene = materialImporter.ReadFile(path, aiProcess_FlipUVs);
+
+        size_t slashPos = path.find_last_of("/\\");
+        if (slashPos != std::string::npos)
+        {
+            materialImportDir = path.substr(0, slashPos + 1);
+        }
+    }
+
     for (uint32_t i = 0; i < importTypes.size(); ++i)
     {
         Asset* newAsset = nullptr;
@@ -2424,6 +2574,29 @@ Asset* ActionManager::ImportAsset(const std::string& path)
         newAsset->SetName(assetName);
 
         success = newAsset->Import(path, &options);
+
+        if (success && materialScene != nullptr && newAsset->GetType() == StaticMesh::GetStaticType())
+        {
+            // meshIndices lines up with importTypes when the file holds several meshes; a
+            // single-mesh file imports index 0.
+            int32_t meshIdx = (meshIndices.size() == importTypes.size()) ? meshIndices[i] : 0;
+
+            if (meshIdx >= 0 && meshIdx < (int32_t)materialScene->mNumMeshes)
+            {
+                Material* mat = ImportMeshMaterial(
+                    materialScene,
+                    materialScene->mMeshes[meshIdx]->mMaterialIndex,
+                    materialImportDir,
+                    materialBaseName,
+                    GetEditorState()->GetAssetDirectory(),
+                    importedTextureMap);
+
+                if (mat != nullptr)
+                {
+                    ((StaticMesh*)newAsset)->SetMaterial(mat);
+                }
+            }
+        }
 
         if (success)
         {
@@ -2764,13 +2937,28 @@ void ActionManager::ImportScene(const SceneImportOptions& options)
                     newMaterial->SetVertexColorMode(options.mDefaultVertexColorMode);
                 }
 
-                uint32_t numBaseTextures = aMaterial->GetTextureCount(aiTextureType_DIFFUSE);
+                // glTF 2.0 keeps its albedo in pbrMetallicRoughness.baseColorTexture, which
+                // Assimp reports as aiTextureType_BASE_COLOR -- not aiTextureType_DIFFUSE, which
+                // is where OBJ, FBX and Collada put it. Asking only for DIFFUSE means every
+                // glTF imports untextured, which is most modern content.
+                //
+                // Query the PBR slot first and fall back to the legacy one, so both eras import
+                // correctly rather than trading one for the other.
+                aiTextureType baseTextureType = aiTextureType_BASE_COLOR;
+                uint32_t numBaseTextures = aMaterial->GetTextureCount(baseTextureType);
+
+                if (numBaseTextures == 0)
+                {
+                    baseTextureType = aiTextureType_DIFFUSE;
+                    numBaseTextures = aMaterial->GetTextureCount(baseTextureType);
+                }
+
                 numBaseTextures = glm::clamp(numBaseTextures, 0u, 4u);
 
                 for (uint32_t t = 0; t < numBaseTextures; ++t)
                 {
                     aiString path;
-                    aiReturn ret = aMaterial->GetTexture(aiTextureType::aiTextureType_DIFFUSE, t, &path);
+                    aiReturn ret = aMaterial->GetTexture(baseTextureType, t, &path);
 
                     if (ret == aiReturn_SUCCESS)
                     {
