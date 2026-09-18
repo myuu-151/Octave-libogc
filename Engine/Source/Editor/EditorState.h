@@ -89,6 +89,15 @@ struct EditorState
     int32_t mSelectedInstance = -1;
     std::vector<EditScene> mEditScenes;
     AssetStub* mSelectedAssetStub = nullptr;
+
+    // Extra assets picked out alongside mSelectedAssetStub, for acting on several at once (moving
+    // them into a folder, say). mSelectedAssetStub stays the primary selection and the anchor that
+    // shift-click ranges extend from; it is not repeated in here.
+    std::vector<AssetStub*> mExtraSelectedAssetStubs;
+
+    bool IsAssetStubSelected(AssetStub* stub) const;
+    std::vector<AssetStub*> GetSelectedAssetStubs() const;
+    void ClearExtraSelectedAssetStubs();
     ControlMode mControlMode = ControlMode::Default;
     TransformLock mTransformLock = TransformLock::None;
     SharedPtr<Camera3D> mEditorCamera;

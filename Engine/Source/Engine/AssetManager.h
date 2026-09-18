@@ -123,6 +123,10 @@ public:
     bool RenameAsset(Asset* asset, const std::string& newName);
     std::string GetParentDirectory(const std::string& path);
     bool RenameDirectory(AssetDir* dir, const std::string& newName);
+
+    // Move an asset into another directory: renames the file on disk and reparents the stub.
+    // References to the asset are by name or UUID rather than path, so nothing else needs updating.
+    bool MoveAsset(AssetStub* stub, AssetDir* destDir);
     void GatherScriptFilesRecursive(const std::string& dirPath, const std::string& relativePath, std::vector<std::string>& scriptFiles);
     std::vector<std::string> GetAvailableScriptFiles();
     std::vector<std::string> GetAvailableFontFiles();

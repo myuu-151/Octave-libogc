@@ -1284,6 +1284,72 @@ std::string AssetManager::GetParentDirectory(const std::string& path)
     return result;
 }
 
+bool AssetManager::MoveAsset(AssetStub* stub, AssetDir* destDir)
+{
+    if (stub == nullptr || destDir == nullptr)
+    {
+        return false;
+    }
+
+    AssetDir* srcDir = stub->mDirectory;
+
+    if (srcDir == destDir)
+    {
+        // Already there: not a failure, just nothing to do.
+        return true;
+    }
+
+    if (stub->mEngineAsset || destDir->mEngineDir)
+    {
+        LogError("Cannot move engine assets.");
+        return false;
+    }
+
+    std::string destPath = destDir->mPath;
+
+    if (destPath.size() > 0 && destPath.back() != '/')
+    {
+        destPath += "/";
+    }
+
+    destPath += stub->mName + ".oct";
+
+    if (SYS_DoesFileExist(destPath.c_str(), false))
+    {
+        LogError("Cannot move %s: a file of that name already exists in %s.",
+                 stub->mName.c_str(), destDir->mName.c_str());
+        return false;
+    }
+
+    if (!SYS_Rename(stub->mPath.c_str(), destPath.c_str()))
+    {
+        LogError("Failed to move %s on disk.", stub->mName.c_str());
+        return false;
+    }
+
+    // Assets are also indexed by path, so that map has to follow the file. Leaving it stale would
+    // keep a lookup pointing at a path nothing lives at any more.
+    auto oldPathItr = mAssetPathMap.find(stub->mPath);
+    if (oldPathItr != mAssetPathMap.end() && oldPathItr->second == stub)
+    {
+        mAssetPathMap.erase(oldPathItr);
+    }
+
+    mAssetPathMap[destPath] = stub;
+
+    stub->mPath = destPath;
+
+    if (srcDir != nullptr)
+    {
+        srcDir->RemoveAssetStub(stub);
+    }
+
+    destDir->mAssetStubs.push_back(stub);
+    stub->mDirectory = destDir;
+
+    return true;
+}
+
 bool AssetManager::RenameDirectory(AssetDir* dir, const std::string& newName)
 {
     bool success = false;
