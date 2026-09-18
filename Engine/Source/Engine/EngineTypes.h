@@ -303,6 +303,10 @@ struct EngineConfig
     float mEditorInterfaceScale = 1.0f;
     int32_t mColorScale = 2;
 
+    // Texture asset shown on the loading screen, e.g. a game logo. Named in Config.ini because the
+    // startup loading screen is up before any game code has run and so cannot be set from there.
+    std::string mLoadingScreenLogo;
+
     // Editor viewport navigation and clipping. Saved so they survive a restart: the useful value
     // depends on the scale of the scene being worked on, so it is a per-project setting rather than
     // something to set again every session. These affect the editor's own camera only.

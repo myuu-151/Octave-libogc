@@ -2,6 +2,8 @@
 
 #include "AssetManager.h"
 #include "Assets/Font.h"
+#include "Assets/Texture.h"
+#include "Engine.h"
 #include "Utilities.h"
 
 FORCE_LINK_DEF(LoadingScreen);
@@ -31,6 +33,12 @@ void LoadingScreen::Create()
     mBackdrop->SetAnchorMode(AnchorMode::FullStretch);
     mBackdrop->SetRatios(0.0f, 0.0f, 1.0f, 1.0f);
     mBackdrop->SetColor(glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+
+    // Created before the text so it draws behind it if the two ever overlap.
+    mLogo = CreateChild<Quad>("LoadLogo");
+    mLogo->SetAnchorMode(AnchorMode::FullStretch);
+    mLogo->SetRatios(0.25f, 0.18f, 0.5f, 0.2f);
+    mLogo->SetVisible(false);
 
     mText = CreateChild<Text>("LoadText");
     mText->SetAnchorMode(AnchorMode::FullStretch);
@@ -72,6 +80,42 @@ void LoadingScreen::SetMessage(const char* message)
     {
         mText->SetText(message);
     }
+}
+
+void LoadingScreen::SetLogo(Texture* texture)
+{
+    if (mLogo == nullptr)
+    {
+        return;
+    }
+
+    mLogo->SetTexture(texture);
+    mLogo->SetVisible(texture != nullptr);
+
+    if (texture == nullptr)
+    {
+        return;
+    }
+
+    // Keep the logo's proportions. The widget's ratios are fractions of the screen, so a height
+    // expressed as a fraction is stretched by however far the screen is from square; correcting by
+    // the screen's aspect is what stops a wide logo being squashed into a tall one.
+    const float texWidth = (float)glm::max<uint32_t>(1u, texture->GetWidth());
+    const float texHeight = (float)glm::max<uint32_t>(1u, texture->GetHeight());
+
+    const float screenWidth = (float)glm::max<uint32_t>(1u, GetEngineState()->mWindowWidth);
+    const float screenHeight = (float)glm::max<uint32_t>(1u, GetEngineState()->mWindowHeight);
+
+    const float widthFrac = 0.55f;
+    const float heightFrac = widthFrac * (texHeight / texWidth) * (screenWidth / screenHeight);
+
+    // Sit it above the text, growing upwards, so a taller logo does not push down into the bar.
+    const float bottom = kBarY - 0.16f;
+
+    mLogo->SetRatios(0.5f - widthFrac * 0.5f,
+                     glm::max(bottom - heightFrac, 0.02f),
+                     widthFrac,
+                     heightFrac);
 }
 
 void LoadingScreen::SetBarVisible(bool visible)

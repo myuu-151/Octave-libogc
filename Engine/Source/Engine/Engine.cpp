@@ -18,6 +18,7 @@
 #include "ScriptFunc.h"
 #include "TimerManager.h"
 #include "Nodes/Widgets/Button.h"
+#include "Nodes/Widgets/LoadingScreen.h"
 #include "FileWatcher.h"
 #include "ScriptUtils.h"
 
@@ -503,6 +504,20 @@ bool Initialize()
     // The scene load pulls in every asset it references and can take several seconds off a disc.
     // It blocks, so nothing draws for the whole of it and the screen used to simply sit black.
     // Put the loading screen up and let the asset loader drive it.
+    if (sEngineConfig.mLoadingScreenLogo != "")
+    {
+        Texture* logo = LoadAsset<Texture>(sEngineConfig.mLoadingScreenLogo);
+
+        if (logo != nullptr && Renderer::Get()->GetLoadingScreenWidget() != nullptr)
+        {
+            Renderer::Get()->GetLoadingScreenWidget()->SetLogo(logo);
+        }
+        else if (logo == nullptr)
+        {
+            LogWarning("Loading screen logo not found: %s", sEngineConfig.mLoadingScreenLogo.c_str());
+        }
+    }
+
     Renderer::Get()->EnableLoadingScreen(true);
     Renderer::Get()->SetLoadingMessage("Loading...");
     Renderer::Get()->SetLoadingProgress(0.0f);
@@ -1120,6 +1135,7 @@ void WriteEngineConfig(std::string path)
         fprintf(configIni, "LqEnableMipMaps=%d\n", sEngineConfig.mLqEnableMipMaps);
 
         fprintf(configIni, "EditorInterfaceScale=%f\n", sEngineConfig.mEditorInterfaceScale);
+        fprintf(configIni, "LoadingScreenLogo=%s\n", sEngineConfig.mLoadingScreenLogo.c_str());
         fprintf(configIni, "EditorNavSpeed=%f\n", sEngineConfig.mEditorNavSpeed);
         fprintf(configIni, "EditorNearClip=%f\n", sEngineConfig.mEditorNearClip);
         fprintf(configIni, "EditorFarClip=%f\n", sEngineConfig.mEditorFarClip);
@@ -1236,6 +1252,8 @@ void ReadEngineConfig(std::string path)
 
             else if (keyStr == "EditorInterfaceScale")
                 sEngineConfig.mEditorInterfaceScale = (float)atof(value);
+            else if (keyStr == "LoadingScreenLogo")
+                sEngineConfig.mLoadingScreenLogo = value;
             else if (keyStr == "EditorNavSpeed")
                 sEngineConfig.mEditorNavSpeed = (float)atof(value);
             else if (keyStr == "EditorNearClip")

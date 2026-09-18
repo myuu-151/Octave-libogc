@@ -28,9 +28,14 @@ public:
     // Hides the bar for work whose length is not known up front, leaving just the message.
     void SetBarVisible(bool visible);
 
+    // An image above the bar, usually the game's logo. Sized from the texture's own proportions
+    // and the screen's, so a wide logo is not stretched into a square one. Null removes it.
+    void SetLogo(class Texture* texture);
+
 protected:
 
     Quad* mBackdrop = nullptr;
+    Quad* mLogo = nullptr;
     Quad* mBarBack = nullptr;
     Quad* mBar = nullptr;
     Text* mText = nullptr;
