@@ -579,6 +579,22 @@ bool Initialize()
     AssetManager::Get()->EnableLoadProgressPump(false);
     Renderer::Get()->EnableLoadingScreen(false);
 
+    // And give the logo's memory back.
+    //
+    // It is only ever seen during the load, but it was staying resident for the whole session --
+    // several hundred kilobytes of texture doing nothing, on a machine where a game can be close
+    // enough to the ceiling for that to matter. The splash is already freed the same way once it
+    // has been shown.
+    if (sEngineConfig.mLoadingScreenLogo != "")
+    {
+        if (Renderer::Get()->GetLoadingScreenWidget() != nullptr)
+        {
+            Renderer::Get()->GetLoadingScreenWidget()->SetLogo(nullptr);
+        }
+
+        UnloadAsset(sEngineConfig.mLoadingScreenLogo);
+    }
+
 #endif
 
     sEngineState.mInitialized = true;
