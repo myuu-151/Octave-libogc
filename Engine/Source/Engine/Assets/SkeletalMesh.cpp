@@ -59,6 +59,22 @@ void SkeletalMesh::LoadStream(Stream& stream, Platform platform)
 
     mNumVertices = stream.ReadUint32();
     mNumIndices = stream.ReadUint32();
+
+    // IndexType is 16 bits on the console backends, because GX addresses its vertex arrays with
+    // GX_INDEX16 and cannot reach past 65536 entries. Indices are stored 32 bits wide on disc and
+    // narrowed below, so a mesh over that many vertices has every high index silently wrap to the
+    // start of the array -- the bulk of the mesh still draws, and the few wrapped triangles stretch
+    // across the scene as huge stray geometry with nothing logged to explain it.
+    //
+    // The existing assert for this lives in Create() and is measured against MAX_MESH_VERTEX_COUNT,
+    // which is 4294967295 under Vulkan. The editor therefore never trips it, and the problem only
+    // ever appears on hardware. Say so here, where the narrowing actually happens.
+    if (mNumVertices > MAX_MESH_VERTEX_COUNT)
+    {
+        LogError("Mesh %s has %u vertices, over this platform's limit of %u. Indices above the "
+                 "limit will wrap and render as stray geometry. Split the mesh.",
+                 GetName().c_str(), mNumVertices, (uint32_t)MAX_MESH_VERTEX_COUNT);
+    }
     // TODO: Handle multiple uv maps
     //mNumUvMaps = stream.ReadUint32();
 

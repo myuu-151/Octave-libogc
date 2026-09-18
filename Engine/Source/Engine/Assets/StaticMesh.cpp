@@ -102,6 +102,22 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
 
     mNumVertices = stream.ReadUint32();
     mNumIndices = stream.ReadUint32();
+
+    // IndexType is 16 bits on the console backends, because GX addresses its vertex arrays with
+    // GX_INDEX16 and cannot reach past 65536 entries. Indices are stored 32 bits wide on disc and
+    // narrowed below, so a mesh over that many vertices has every high index silently wrap to the
+    // start of the array -- the bulk of the mesh still draws, and the few wrapped triangles stretch
+    // across the scene as huge stray geometry with nothing logged to explain it.
+    //
+    // The existing assert for this lives in Create() and is measured against MAX_MESH_VERTEX_COUNT,
+    // which is 4294967295 under Vulkan. The editor therefore never trips it, and the problem only
+    // ever appears on hardware. Say so here, where the narrowing actually happens.
+    if (mNumVertices > MAX_MESH_VERTEX_COUNT)
+    {
+        LogError("Mesh %s has %u vertices, over this platform's limit of %u. Indices above the "
+                 "limit will wrap and render as stray geometry. Split the mesh.",
+                 GetName().c_str(), mNumVertices, (uint32_t)MAX_MESH_VERTEX_COUNT);
+    }
     mNumUvMaps = stream.ReadUint32();
 
     stream.ReadAsset(mMaterial);
@@ -159,11 +175,57 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
         }
     }
 
+    // Indices are stored 32 bits wide and narrowed to IndexType here. On a platform where that is
+    // 16 bits, an index past the limit wraps to the start of the vertex array rather than failing,
+    // so the triangle that used it is drawn between three unrelated vertices and stretches across
+    // the scene. Drop those triangles instead of drawing known-bad geometry: the mesh loses the
+    // faces it could never have addressed, which reads as a small hole, rather than gaining a
+    // stray polygon over everything else.
+    //
+    // Nothing is dropped on a 32-bit-index platform, where the limit is UINT32_MAX.
     ResizeIndexArray(mNumIndices);
-    for (uint32_t i = 0; i < mNumIndices; ++i)
+
+    uint32_t dstIndex = 0;
+    uint32_t droppedTriangles = 0;
+    uint32_t i = 0;
+
+    for (; i + 2 < mNumIndices; i += 3)
     {
-        mIndices[i] = (IndexType) stream.ReadUint32();
+        uint32_t i0 = stream.ReadUint32();
+        uint32_t i1 = stream.ReadUint32();
+        uint32_t i2 = stream.ReadUint32();
+
+        if (i0 > MAX_MESH_VERTEX_COUNT ||
+            i1 > MAX_MESH_VERTEX_COUNT ||
+            i2 > MAX_MESH_VERTEX_COUNT)
+        {
+            droppedTriangles++;
+            continue;
+        }
+
+        mIndices[dstIndex++] = (IndexType) i0;
+        mIndices[dstIndex++] = (IndexType) i1;
+        mIndices[dstIndex++] = (IndexType) i2;
     }
+
+    // A trailing partial triangle should not exist, but the stream still has to be drained.
+    for (; i < mNumIndices; ++i)
+    {
+        uint32_t index = stream.ReadUint32();
+
+        if (index <= MAX_MESH_VERTEX_COUNT)
+        {
+            mIndices[dstIndex++] = (IndexType) index;
+        }
+    }
+
+    if (droppedTriangles > 0)
+    {
+        LogError("Mesh %s: dropped %u triangle(s) indexing past vertex %u.",
+                 GetName().c_str(), droppedTriangles, (uint32_t)MAX_MESH_VERTEX_COUNT);
+    }
+
+    mNumIndices = dstIndex;
 
     // Collision shapes
     bool compound = stream.ReadBool();
