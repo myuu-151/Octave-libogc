@@ -50,9 +50,19 @@ void EditorState::Init()
     mEditorCamera->SetName("Editor Camera");
     // TODO-NODE: This is a little sketchy because this will call World::RegisterNode(), but that's probably fine.
     mEditorCamera->SetWorld(GetWorld(0), false);
+
+    // Restore the saved clip planes before applying them, so the viewport opens where it was left
+    // rather than at the defaults. ApplyEditorCameraSettings() is the only thing that writes these
+    // onto the camera, and it runs again on every projection toggle, so these members are what has
+    // to hold the value -- setting the camera directly would be undone the first time the view
+    // switched between perspective and orthographic.
+    mPerspectiveNearZ = GetEngineConfig()->mEditorNearClip;
+    mPerspectiveFarZ = GetEngineConfig()->mEditorFarClip;
+
     ApplyEditorCameraSettings();
 
     mViewport3D = new Viewport3D();
+    mViewport3D->SetFirstPersonMoveSpeed(GetEngineConfig()->mEditorNavSpeed);
     mViewport2D = new Viewport2D();
     mPaintManager = new PaintManager();
 
@@ -77,6 +87,16 @@ void EditorState::Shutdown()
 
     WriteEditorProjectSave();
     WriteEditorSave();
+
+    // Navigation speed can also be changed by scrolling while flying, which has no natural moment
+    // to save at the way a slider release does. Catch up here so a speed set that way persists too,
+    // and only write when something actually differs -- packaging runs through this path as well.
+    if (mViewport3D != nullptr &&
+        mViewport3D->GetFirstPersonMoveSpeed() != GetEngineConfig()->mEditorNavSpeed)
+    {
+        GetMutableEngineConfig()->mEditorNavSpeed = mViewport3D->GetFirstPersonMoveSpeed();
+        WriteEngineConfig();
+    }
 
     mEditScenes.clear();
 
@@ -489,6 +509,54 @@ void EditorState::SetSelectedAssetStub(AssetStub* newStub)
             AssetManager::Get()->LoadAsset(*newStub);
         }
     }
+}
+
+bool EditorState::IsAssetStubSelected(AssetStub* stub) const
+{
+    if (stub == nullptr)
+    {
+        return false;
+    }
+
+    if (stub == mSelectedAssetStub)
+    {
+        return true;
+    }
+
+    for (AssetStub* extra : mExtraSelectedAssetStubs)
+    {
+        if (extra == stub)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::vector<AssetStub*> EditorState::GetSelectedAssetStubs() const
+{
+    std::vector<AssetStub*> stubs;
+
+    if (mSelectedAssetStub != nullptr)
+    {
+        stubs.push_back(mSelectedAssetStub);
+    }
+
+    for (AssetStub* extra : mExtraSelectedAssetStubs)
+    {
+        if (extra != nullptr && extra != mSelectedAssetStub)
+        {
+            stubs.push_back(extra);
+        }
+    }
+
+    return stubs;
+}
+
+void EditorState::ClearExtraSelectedAssetStubs()
+{
+    mExtraSelectedAssetStubs.clear();
 }
 
 void EditorState::SetControlMode(ControlMode newMode)

@@ -3173,6 +3173,53 @@ static void DrawAssetsContextPopup(AssetStub* stub, AssetDir* dir)
     }
 }
 
+// Accept assets dropped onto a folder row and move the whole selection into it. Shared by the
+// child directories and the ".." parent row, so dragging up a level works the same as dragging down.
+static void HandleAssetDirDropTarget(AssetDir* destDir)
+{
+    if (destDir == nullptr || !ImGui::BeginDragDropTarget())
+    {
+        return;
+    }
+
+    if (ImGui::AcceptDragDropPayload("ASSET_STUBS") != nullptr)
+    {
+        std::vector<AssetStub*> dragged = GetEditorState()->GetSelectedAssetStubs();
+
+        uint32_t numMoved = 0;
+        uint32_t numFailed = 0;
+
+        for (AssetStub* dragStub : dragged)
+        {
+            if (AssetManager::Get()->MoveAsset(dragStub, destDir))
+            {
+                numMoved++;
+            }
+            else
+            {
+                numFailed++;
+            }
+        }
+
+        // The moved assets are no longer in the directory being displayed, so a selection pointing
+        // at them would highlight nothing and confuse the next shift-click.
+        GetEditorState()->ClearExtraSelectedAssetStubs();
+        GetEditorState()->SetSelectedAssetStub(nullptr);
+
+        if (numFailed > 0)
+        {
+            LogWarning("Moved %u asset(s) to %s, %u failed.",
+                       numMoved, destDir->mName.c_str(), numFailed);
+        }
+        else
+        {
+            LogDebug("Moved %u asset(s) to %s.", numMoved, destDir->mName.c_str());
+        }
+    }
+
+    ImGui::EndDragDropTarget();
+}
+
 static void DrawAssetBrowser(bool showFilter, bool interactive)
 {
     AssetDir* currentDir = GetEditorState()->GetAssetDirectory();
@@ -3234,6 +3281,8 @@ static void DrawAssetBrowser(bool showFilter, bool interactive)
                 {
                     GetEditorState()->SetAssetDirectory(currentDir->mParentDir, true);
                 }
+
+                HandleAssetDirDropTarget(currentDir->mParentDir);
             }
 
             // Child Dirs
@@ -3245,6 +3294,8 @@ static void DrawAssetBrowser(bool showFilter, bool interactive)
                 {
                     GetEditorState()->SetAssetDirectory(childDir, true);
                 }
+
+                HandleAssetDirDropTarget(childDir);
 
                 if (ImGui::BeginPopupContextItem())
                 {
@@ -3268,7 +3319,7 @@ static void DrawAssetBrowser(bool showFilter, bool interactive)
         {
             AssetStub* stub = (*stubs)[i];
 
-            bool isSelectedStub = (stub == selStub);
+            bool isSelectedStub = GetEditorState()->IsAssetStubSelected(stub);
             if (isSelectedStub)
             {
                 ImGui::PushStyleColor(ImGuiCol_Header, kSelectedColor);
@@ -3287,12 +3338,81 @@ static void DrawAssetBrowser(bool showFilter, bool interactive)
 
             if (ImGui::Selectable(assetDispText.c_str(), isSelectedStub, ImGuiSelectableFlags_AllowDoubleClick))
             {
-                if (selStub != stub)
+                if (IsShiftDown() && selStub != nullptr && selStub != stub)
                 {
+                    // Range select, anchored on the primary selection, so a run of assets can be
+                    // picked without clicking each one. The anchor stays put so the range can be
+                    // adjusted by shift-clicking somewhere else.
+                    int32_t anchorIdx = -1;
+                    int32_t thisIdx = -1;
+
+                    for (uint32_t j = 0; j < stubs->size(); ++j)
+                    {
+                        if ((*stubs)[j] == selStub) { anchorIdx = (int32_t)j; }
+                        if ((*stubs)[j] == stub)    { thisIdx = (int32_t)j; }
+                    }
+
+                    if (anchorIdx >= 0 && thisIdx >= 0)
+                    {
+                        int32_t lo = glm::min(anchorIdx, thisIdx);
+                        int32_t hi = glm::max(anchorIdx, thisIdx);
+
+                        GetEditorState()->ClearExtraSelectedAssetStubs();
+
+                        for (int32_t j = lo; j <= hi; ++j)
+                        {
+                            if ((*stubs)[j] != selStub)
+                            {
+                                GetEditorState()->mExtraSelectedAssetStubs.push_back((*stubs)[j]);
+                            }
+                        }
+                    }
+                }
+                else if (IsControlDown())
+                {
+                    // Toggle one asset in or out of the selection, leaving the rest alone.
+                    if (stub == selStub)
+                    {
+                        // Dropping the anchor itself: promote another member so the selection does
+                        // not lose the primary it is anchored on.
+                        if (GetEditorState()->mExtraSelectedAssetStubs.size() > 0)
+                        {
+                            AssetStub* promoted = GetEditorState()->mExtraSelectedAssetStubs.back();
+                            GetEditorState()->mExtraSelectedAssetStubs.pop_back();
+                            GetEditorState()->SetSelectedAssetStub(promoted);
+                        }
+                        else
+                        {
+                            GetEditorState()->SetSelectedAssetStub(nullptr);
+                        }
+                    }
+                    else
+                    {
+                        std::vector<AssetStub*>& extras = GetEditorState()->mExtraSelectedAssetStubs;
+                        auto itr = std::find(extras.begin(), extras.end(), stub);
+
+                        if (itr != extras.end())
+                        {
+                            extras.erase(itr);
+                        }
+                        else if (selStub == nullptr)
+                        {
+                            GetEditorState()->SetSelectedAssetStub(stub);
+                        }
+                        else
+                        {
+                            extras.push_back(stub);
+                        }
+                    }
+                }
+                else if (selStub != stub)
+                {
+                    GetEditorState()->ClearExtraSelectedAssetStubs();
                     GetEditorState()->SetSelectedAssetStub(stub);
                 }
-                else if (!IsControlDown())
+                else
                 {
+                    GetEditorState()->ClearExtraSelectedAssetStubs();
                     GetEditorState()->SetSelectedAssetStub(nullptr);
                 }
 
@@ -3320,6 +3440,37 @@ static void DrawAssetBrowser(bool showFilter, bool interactive)
                             GetEditorState()->InspectObject(stub->mAsset);
                     }
                 }
+            }
+
+            // Drag assets onto a folder row to move them. Dragging something already in the
+            // selection carries the whole selection; dragging anything else takes just that asset,
+            // which matches how file managers behave and avoids moving things you forgot were
+            // selected.
+            if (interactive && ImGui::BeginDragDropSource(ImGuiDragDropFlags_None))
+            {
+                if (!GetEditorState()->IsAssetStubSelected(stub))
+                {
+                    GetEditorState()->ClearExtraSelectedAssetStubs();
+                    GetEditorState()->SetSelectedAssetStub(stub);
+                }
+
+                // The payload is a marker only. The stubs themselves are read from the selection on
+                // drop, so the moved set cannot disagree with what is highlighted.
+                uint32_t dragMarker = 1;
+                ImGui::SetDragDropPayload("ASSET_STUBS", &dragMarker, sizeof(uint32_t));
+
+                const uint32_t numDragged = (uint32_t)GetEditorState()->GetSelectedAssetStubs().size();
+
+                if (numDragged > 1)
+                {
+                    ImGui::Text("%u assets", numDragged);
+                }
+                else
+                {
+                    ImGui::Text("%s", stub->mName.c_str());
+                }
+
+                ImGui::EndDragDropSource();
             }
 
             if (GetEditorState()->mTrackSelectedAsset &&
@@ -4382,11 +4533,21 @@ static void DrawViewportPanel()
                 viewport3d->SetFirstPersonMoveSpeed(navSpeed);
             }
 
+            // Save when the drag ends rather than on every frame of it, so one adjustment writes
+            // the file once instead of a few hundred times.
+            if (ImGui::IsItemDeactivatedAfterEdit())
+            {
+                GetMutableEngineConfig()->mEditorNavSpeed = viewport3d->GetFirstPersonMoveSpeed();
+                WriteEngineConfig();
+            }
+
             ImGui::SameLine();
 
             if (ImGui::SmallButton("Reset##NavSpeed"))
             {
                 viewport3d->SetFirstPersonMoveSpeed(10.0f);
+                GetMutableEngineConfig()->mEditorNavSpeed = 10.0f;
+                WriteEngineConfig();
             }
 
             if (ImGui::IsItemHovered())
@@ -4410,11 +4571,23 @@ static void DrawViewportPanel()
 
             ImGui::SetNextItemWidth(160.0f);
 
+            // Write through EditorState rather than straight onto the camera. It re-applies its own
+            // stored planes on every projection toggle, so a value set only on the camera would be
+            // discarded the first time the view switched between perspective and orthographic.
+            EditorState* clipState = GetEditorState();
+
             if (ImGui::SliderFloat("Near##ClipNear", &nearZ, 0.01f, 10.0f, "%.3f",
                                    ImGuiSliderFlags_Logarithmic))
             {
                 // Keep the planes ordered; a near at or past the far plane collapses the frustum.
-                cam->SetNearZ(glm::min(nearZ, cam->GetFarZ() - 0.01f));
+                clipState->mPerspectiveNearZ = glm::min(nearZ, clipState->mPerspectiveFarZ - 0.01f);
+                clipState->ApplyEditorCameraSettings();
+            }
+
+            if (ImGui::IsItemDeactivatedAfterEdit())
+            {
+                GetMutableEngineConfig()->mEditorNearClip = clipState->mPerspectiveNearZ;
+                WriteEngineConfig();
             }
 
             ImGui::SetNextItemWidth(160.0f);
@@ -4422,13 +4595,25 @@ static void DrawViewportPanel()
             if (ImGui::SliderFloat("Far##ClipFar", &farZ, 10.0f, 100000.0f, "%.0f",
                                    ImGuiSliderFlags_Logarithmic))
             {
-                cam->SetFarZ(glm::max(farZ, cam->GetNearZ() + 0.01f));
+                clipState->mPerspectiveFarZ = glm::max(farZ, clipState->mPerspectiveNearZ + 0.01f);
+                clipState->ApplyEditorCameraSettings();
+            }
+
+            if (ImGui::IsItemDeactivatedAfterEdit())
+            {
+                GetMutableEngineConfig()->mEditorFarClip = clipState->mPerspectiveFarZ;
+                WriteEngineConfig();
             }
 
             if (ImGui::SmallButton("Reset##ClipPlanes"))
             {
-                cam->SetNearZ(0.25f);
-                cam->SetFarZ(4096.0f);
+                clipState->mPerspectiveNearZ = 0.25f;
+                clipState->mPerspectiveFarZ = 4096.0f;
+                clipState->ApplyEditorCameraSettings();
+
+                GetMutableEngineConfig()->mEditorNearClip = 0.25f;
+                GetMutableEngineConfig()->mEditorFarClip = 4096.0f;
+                WriteEngineConfig();
             }
 
             if (ImGui::IsItemHovered())

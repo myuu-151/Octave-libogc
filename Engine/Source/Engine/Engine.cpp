@@ -1106,6 +1106,9 @@ void WriteEngineConfig(std::string path)
         fprintf(configIni, "LqEnableMipMaps=%d\n", sEngineConfig.mLqEnableMipMaps);
 
         fprintf(configIni, "EditorInterfaceScale=%f\n", sEngineConfig.mEditorInterfaceScale);
+        fprintf(configIni, "EditorNavSpeed=%f\n", sEngineConfig.mEditorNavSpeed);
+        fprintf(configIni, "EditorNearClip=%f\n", sEngineConfig.mEditorNearClip);
+        fprintf(configIni, "EditorFarClip=%f\n", sEngineConfig.mEditorFarClip);
         fprintf(configIni, "ScriptHotReload=%d\n", sEngineConfig.mScriptHotReload);
         fprintf(configIni, "ColorScale=%d\n", sEngineConfig.mColorScale);
         fprintf(configIni, "ShowSplash=%d\n", sEngineConfig.mShowSplash);
@@ -1219,6 +1222,12 @@ void ReadEngineConfig(std::string path)
 
             else if (keyStr == "EditorInterfaceScale")
                 sEngineConfig.mEditorInterfaceScale = (float)atof(value);
+            else if (keyStr == "EditorNavSpeed")
+                sEngineConfig.mEditorNavSpeed = (float)atof(value);
+            else if (keyStr == "EditorNearClip")
+                sEngineConfig.mEditorNearClip = (float)atof(value);
+            else if (keyStr == "EditorFarClip")
+                sEngineConfig.mEditorFarClip = (float)atof(value);
             else if (keyStr == "ScriptHotReload")
                 sEngineConfig.mScriptHotReload = strToBool(value);
             else if (keyStr == "ColorScale")

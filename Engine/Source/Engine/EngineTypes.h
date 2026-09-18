@@ -303,6 +303,13 @@ struct EngineConfig
     float mEditorInterfaceScale = 1.0f;
     int32_t mColorScale = 2;
 
+    // Editor viewport navigation and clipping. Saved so they survive a restart: the useful value
+    // depends on the scale of the scene being worked on, so it is a per-project setting rather than
+    // something to set again every session. These affect the editor's own camera only.
+    float mEditorNavSpeed = 10.0f;
+    float mEditorNearClip = 0.25f;
+    float mEditorFarClip = 4096.0f;
+
     // Headless mode configuration
     bool mHeadless = false;
     Platform mBuildPlatform = Platform::Count;  // Count = no build requested
