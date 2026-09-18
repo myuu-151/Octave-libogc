@@ -127,14 +127,31 @@ void CookTexture(
         CreateDir(tempDir.c_str());
     }
 
-    // Check if texture is fully opaque
+    // Check if texture is fully opaque, and if not, whether its alpha is a mask or a gradient.
+    //
+    // The distinction decides which formats can hold it. CMPR carries one bit of alpha, which is
+    // exactly enough for a mask -- every texel either there or not -- and nothing like enough for
+    // a gradient. Knowing which this is means a cutout texture can stay at 4 bits a texel instead
+    // of being pushed up to 16 for an alpha channel it never needed.
     bool opaque = true;
+    bool maskedAlpha = true;
+
     for (uint32_t i = 0; i < srcPixels.size(); i += 4)
     {
-        if (srcPixels[i + 3] != 0xff)
+        const uint8_t alpha = srcPixels[i + 3];
+
+        if (alpha != 0xff)
         {
             opaque = false;
-            break;
+
+            // Anything between counts as a gradient. The tolerance is for textures whose fully
+            // transparent or fully opaque texels have been nudged a little by resizing or by a
+            // lossy source.
+            if (alpha > 8 && alpha < 247)
+            {
+                maskedAlpha = false;
+                break;
+            }
         }
     }
 
@@ -281,7 +298,13 @@ void CookTexture(
         // Flipper and Wii's Hollywood share these texture formats and the same converter -- so a
         // GameCube build silently lost every soft alpha. The N3DS branch below already picks
         // etc1 vs etc1a4 on opacity alone, which is the same decision made correctly.
-        if (format == PixelFormat::CMPR && !opaque)
+        //
+        // A mask is the exception. CMPR is DXT1, which carries exactly one bit of alpha, so a
+        // texture whose texels are only ever fully there or fully absent loses nothing by staying
+        // compressed -- and stays at a quarter of the size it would be as RGB5A3. That is worth
+        // having for a large cutout: a 512x1024 costs 2.7MB as RGBA8, 1.3MB as RGB5A3 and 340KB
+        // as CMPR.
+        if (format == PixelFormat::CMPR && !opaque && !maskedAlpha)
         {
             format = PixelFormat::RGBA5551;
         }
@@ -291,7 +314,7 @@ void CookTexture(
         case PixelFormat::LA4: cookCmd += "2"; break;
         case PixelFormat::RGB565: cookCmd += "4"; break;
         case PixelFormat::RGBA5551: cookCmd += "5"; break;
-        case PixelFormat::CMPR: cookCmd += "14"; break;
+        case PixelFormat::CMPR: cookCmd += "14"; break;   // DXT1; carries 1-bit alpha
         case PixelFormat::RGBA8: // Fallthrough to default
         default: cookCmd += "6"; break;
         }
