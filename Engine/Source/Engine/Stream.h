@@ -147,4 +147,9 @@ private:
     uint32_t mAssetVersion;  // Version of asset being read (for format compatibility)
     AsyncLoadRequest* mAsyncRequest;
     bool mExternal;
+
+    // Set when the stream could not grow. Whatever was being written is dropped rather than
+    // overrunning the buffer, so the data is known to be incomplete instead of the heap being
+    // quietly corrupted.
+    bool mAllocFailed = false;
 };

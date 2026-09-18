@@ -153,6 +153,16 @@ bool Stream::ReadFile(const char* path, bool isAsset, int32_t maxSize)
     {
         OCT_ASSERT(fileSize <= MAX_FILE_SIZE);
         Reserve(fileSize);
+
+        // Reserve leaves the stream alone if it could not allocate, so the room for this copy has
+        // to be confirmed rather than assumed.
+        if (mData == nullptr || mCapacity < fileSize)
+        {
+            LogError("Stream: no room for %u bytes reading %s.", fileSize, path);
+            SYS_ReleaseFileData(fileData);
+            return false;
+        }
+
         memcpy(mData, fileData, fileSize);
 
         SYS_ReleaseFileData(fileData);
@@ -507,6 +517,12 @@ void Stream::WriteBytes(const uint8_t* src, uint32_t length)
         Grow(mPos + length);
     }
 
+    if (mData == nullptr || mPos + length > mCapacity)
+    {
+        // No room, and Grow has already said so.
+        return;
+    }
+
     if (length > 0)
     {
         memcpy(&mData[mPos], src, length);
@@ -792,6 +808,16 @@ void Stream::Grow(uint32_t newSize)
         {
             uint32_t newCapacity = glm::max(newSize, mCapacity * 2);
             Reserve(newCapacity);
+
+            // Reserve leaves the stream untouched when it cannot allocate. Record that here, so
+            // the write that prompted the growth is dropped instead of running off the end of a
+            // buffer that never got any bigger. Silently overrunning the heap is worse than
+            // losing the data, and much harder to find afterwards.
+            if (mCapacity < newSize)
+            {
+                mAllocFailed = true;
+                return;
+            }
         }
     }
     else
@@ -814,6 +840,20 @@ void Stream::Reserve(uint32_t capacity)
     if (capacity > mCapacity)
     {
         char* newBuffer = (char*) malloc(capacity);
+
+        // Out of memory. This used to carry on: the copy below went into a null pointer and the
+        // game died inside memcpy at address 0, which names neither the file being read nor the
+        // fact that memory had run out. Every asset read goes through here, so that was the shape
+        // of any out-of-memory during loading.
+        //
+        // Leave the stream exactly as it was and let the caller find its capacity unchanged. The
+        // old buffer is deliberately kept rather than freed -- throwing away good data on the way
+        // to reporting a failure only makes the next thing to touch it fail worse.
+        if (newBuffer == nullptr)
+        {
+            LogError("Stream: could not allocate %u bytes; out of memory.", capacity);
+            return;
+        }
 
         if (mData != nullptr)
         {
