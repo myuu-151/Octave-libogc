@@ -304,10 +304,21 @@ void BindMaterial(MaterialLite* material, bool useVertexColor, bool useBakedLigh
     glm::vec4 materialColor = color;
     materialColor = glm::clamp(materialColor, 0.0f, 1.0f);
     float opacityScale = !(useVertexColor || unlit) ? gGxContext.mInvColorScale : 1.0f;
+
+    // The material colour's alpha belongs here alongside the opacity slider. Forward.frag builds
+    // its alpha as inColor.a * diffuse.a * mOpacity, and diffuse has already been multiplied by
+    // mColor -- so the colour's alpha scales the result there. GX used to write the opacity alone
+    // and drop materialColor.a on the floor, which made a Translucent material whose translucency
+    // came from its colour render fully solid on console while looking correct in the editor. With
+    // no texture bound, slot 0 falls back to the white texture, so the colour was the only alpha
+    // the material had and the opacity slider was the only thing that still did anything.
+    //
+    // opacityScale is at most 1 (mColorScale is 1, 2 or 4), and alpha is at most 1, so the product
+    // stays in range for the byte.
     GX_SetChanMatColor(matColorChannel, { uint8_t(materialColor.r * 255.0f),
                                         uint8_t(materialColor.g * 255.0f),
                                         uint8_t(materialColor.b * 255.0f),
-                                        uint8_t(opacity * 255.f * opacityScale) });
+                                        uint8_t(materialColor.a * opacity * 255.f * opacityScale) });
 
     glm::vec4 ambientColor = useBakedLighting ? glm::vec4(0.0f, 0.0f, 0.0f, 1.0f) : gGxContext.mWorld->GetAmbientLightColor();
     ambientColor = glm::clamp(ambientColor * gGxContext.mInvColorScale, 0.0f, 1.0f);
