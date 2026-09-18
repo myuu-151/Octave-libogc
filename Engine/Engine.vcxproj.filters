@@ -479,6 +479,9 @@
     <ClCompile Include="Source\Engine\Nodes\Widgets\VideoQuad.cpp">
       <Filter>Source Files\Engine\Nodes\Widgets</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Engine\Nodes\Widgets\LoadingScreen.cpp">
+      <Filter>Source Files\Engine\Nodes\Widgets</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Engine\Nodes\Widgets\StatsOverlay.cpp">
       <Filter>Source Files\Engine\Nodes\Widgets</Filter>
     </ClCompile>
@@ -1003,6 +1006,9 @@
       <Filter>Source Files\Engine\Nodes\Widgets</Filter>
     </ClInclude>
     <ClInclude Include="Source\Engine\Nodes\Widgets\VideoQuad.h">
+      <Filter>Source Files\Engine\Nodes\Widgets</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Engine\Nodes\Widgets\LoadingScreen.h">
       <Filter>Source Files\Engine\Nodes\Widgets</Filter>
     </ClInclude>
     <ClInclude Include="Source\Engine\Nodes\Widgets\StatsOverlay.h">

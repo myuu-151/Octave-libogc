@@ -183,6 +183,7 @@ void ForceLinkage()
     FORCE_LINK_CALL(PolyRect);
     FORCE_LINK_CALL(Poly);
     FORCE_LINK_CALL(StatsOverlay);
+    FORCE_LINK_CALL(LoadingScreen);
     FORCE_LINK_CALL(Text);
     FORCE_LINK_CALL(Widget);
     FORCE_LINK_CALL(Button);

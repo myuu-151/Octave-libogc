@@ -17,6 +17,7 @@
 class Widget;
 class Quad;
 class Console;
+class LoadingScreen;
 class StatsOverlay;
 class CameraFrustum;
 
@@ -48,6 +49,13 @@ public:
     void EnableStatsOverlay(bool enable);
     bool IsStatsOverlayEnabled() const;
     void EnableConsole(bool enable);
+
+    // Built-in loading screen. Hidden until a project asks for it; see LoadingScreen.h.
+    void EnableLoadingScreen(bool enable);
+    bool IsLoadingScreenEnabled();
+    void SetLoadingProgress(float progress);
+    void SetLoadingMessage(const char* message);
+    LoadingScreen* GetLoadingScreenWidget();
     bool IsConsoleEnabled();
 
     void DirtyAllWidgets();
@@ -203,6 +211,7 @@ private:
 
     SharedPtr<StatsOverlay> mStatsWidget;
     SharedPtr<Console> mConsoleWidget;
+    SharedPtr<LoadingScreen> mLoadingScreenWidget;
 
     // "Powered by Octave" boot splash (packaged games only).
     SharedPtr<Quad> mSplashWidget;

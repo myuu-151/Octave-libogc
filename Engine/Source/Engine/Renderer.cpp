@@ -6,6 +6,7 @@
 #include "Constants.h"
 #include "Nodes/Widgets/Widget.h"
 #include "Nodes/Widgets/Console.h"
+#include "Nodes/Widgets/LoadingScreen.h"
 #include "Nodes/Widgets/StatsOverlay.h"
 #include "Nodes/Widgets/Quad.h"
 #include "Assets/Font.h"
@@ -86,6 +87,12 @@ Renderer::~Renderer()
         mConsoleWidget = nullptr;
     }
 
+    if (mLoadingScreenWidget != nullptr)
+    {
+        mLoadingScreenWidget->Destroy();
+        mLoadingScreenWidget = nullptr;
+    }
+
     if (mStatsWidget != nullptr)
     {
         mStatsWidget->Destroy();
@@ -107,6 +114,15 @@ void Renderer::Initialize()
 #endif
 
     mStatsWidget = Node::Construct<StatsOverlay>();
+
+    // Hidden until something asks for it. A project that never loads anything visible should not
+    // pay for a black quad over its first frame.
+    mLoadingScreenWidget = Node::Construct<LoadingScreen>();
+
+    if (mLoadingScreenWidget != nullptr)
+    {
+        mLoadingScreenWidget->SetVisible(false);
+    }
 
 #if (PLATFORM_WINDOWS || PLATFORM_LINUX || PLATFORM_ANDROID) && !_DEBUG
     if (mConsoleWidget != nullptr)
@@ -474,6 +490,40 @@ bool Renderer::IsConsoleEnabled()
     return mConsoleWidget && mConsoleWidget->IsVisible();
 }
 
+void Renderer::EnableLoadingScreen(bool enable)
+{
+    if (mLoadingScreenWidget)
+    {
+        mLoadingScreenWidget->SetVisible(enable);
+    }
+}
+
+bool Renderer::IsLoadingScreenEnabled()
+{
+    return mLoadingScreenWidget && mLoadingScreenWidget->IsVisible();
+}
+
+void Renderer::SetLoadingProgress(float progress)
+{
+    if (mLoadingScreenWidget)
+    {
+        mLoadingScreenWidget->SetProgress(progress);
+    }
+}
+
+void Renderer::SetLoadingMessage(const char* message)
+{
+    if (mLoadingScreenWidget)
+    {
+        mLoadingScreenWidget->SetMessage(message);
+    }
+}
+
+LoadingScreen* Renderer::GetLoadingScreenWidget()
+{
+    return mLoadingScreenWidget.Get();
+}
+
 void Renderer::DirtyAllWidgets()
 {
     if (mConsoleWidget != nullptr)
@@ -481,6 +531,9 @@ void Renderer::DirtyAllWidgets()
 
     if (mStatsWidget != nullptr)
         mStatsWidget->MarkDirty();
+
+    if (mLoadingScreenWidget != nullptr)
+        mLoadingScreenWidget->MarkDirty();
 
     // TODO: Iterate over all worlds if we add multiple worlds
     for (int32_t i = 0; i < GetNumWorlds(); ++i)
@@ -761,6 +814,7 @@ void Renderer::GatherDrawData(World* world)
 
             if (mStatsWidget != nullptr && mStatsWidget->IsVisible()) { mStatsWidget->Traverse(gatherDrawData); }
             if (mConsoleWidget != nullptr && mConsoleWidget->IsVisible()) { mConsoleWidget->Traverse(gatherDrawData); }
+            if (mLoadingScreenWidget != nullptr && mLoadingScreenWidget->IsVisible()) { mLoadingScreenWidget->Traverse(gatherDrawData); }
             if (mSplashWidget != nullptr && mSplashActive && mSplashWidget->IsVisible()) { mSplashWidget->Traverse(gatherDrawData); }
 
 #if EDITOR
@@ -1324,6 +1378,7 @@ void Renderer::Render(World* world, int32_t screenIndex)
 
         if (mStatsWidget != nullptr && mStatsWidget->IsVisible()) { mStatsWidget->PrepareTick(sTickNodes, inGame, true); }
         if (mConsoleWidget != nullptr && mConsoleWidget->IsVisible()) { mConsoleWidget->PrepareTick(sTickNodes, inGame, true); }
+        if (mLoadingScreenWidget != nullptr && mLoadingScreenWidget->IsVisible()) { mLoadingScreenWidget->PrepareTick(sTickNodes, inGame, true); }
 
         UpdateSplash();
         if (mSplashWidget != nullptr && mSplashActive && mSplashWidget->IsVisible()) { mSplashWidget->PrepareTick(sTickNodes, inGame, true); }

@@ -729,6 +729,7 @@
     <ClCompile Include="Source\Engine\Nodes\Widgets\PolyRect.cpp" />
     <ClCompile Include="Source\Engine\Nodes\Widgets\Quad.cpp" />
     <ClCompile Include="Source\Engine\Nodes\Widgets\VideoQuad.cpp" />
+    <ClCompile Include="Source\Engine\Nodes\Widgets\LoadingScreen.cpp" />
     <ClCompile Include="Source\Engine\Nodes\Widgets\StatsOverlay.cpp" />
     <ClCompile Include="Source\Engine\Nodes\Widgets\Text.cpp" />
     <ClCompile Include="Source\Engine\Nodes\Widgets\Widget.cpp" />
@@ -993,6 +994,7 @@
     <ClInclude Include="Source\Engine\Nodes\Widgets\PolyRect.h" />
     <ClInclude Include="Source\Engine\Nodes\Widgets\Quad.h" />
     <ClInclude Include="Source\Engine\Nodes\Widgets\VideoQuad.h" />
+    <ClInclude Include="Source\Engine\Nodes\Widgets\LoadingScreen.h" />
     <ClInclude Include="Source\Engine\Nodes\Widgets\StatsOverlay.h" />
     <ClInclude Include="Source\Engine\Nodes\Widgets\Text.h" />
     <ClInclude Include="Source\Engine\Nodes\Widgets\Widget.h" />
