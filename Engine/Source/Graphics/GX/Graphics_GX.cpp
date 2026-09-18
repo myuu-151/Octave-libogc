@@ -859,13 +859,27 @@ void GFX_DrawSkeletalMeshComp(SkeletalMesh3D* skeletalMeshComp)
         SetupLightMask(material->GetShadingModel(), skeletalMeshComp->GetLightingChannels(), false);
         SetupLightingChannels();
 
-        GX_Begin(GX_TRIANGLES, GX_VTXFMT0, mesh->GetNumIndices());
+        // GX_Begin's vertex count is a u16, so a primitive tops out at 65535 vertices --
+        // 21845 triangles. Anything larger wrapped silently and the GP read the surplus
+        // vertex data as commands (see CreateMeshDisplayList for the same fix).
+        const uint32_t numFaces = mesh->GetNumFaces();
+        const uint32_t kMaxFacesPerBatch = 21845;
+        const uint32_t numBatches = (numFaces + kMaxFacesPerBatch - 1) / kMaxFacesPerBatch;
 
         const uint16_t* indices = mesh->GetIndices();
 
+        for (uint32_t batch = 0; batch < numBatches; ++batch)
+        {
+        const uint32_t firstFace = batch * kMaxFacesPerBatch;
+        const uint32_t batchFaces = (numFaces - firstFace < kMaxFacesPerBatch)
+                                  ? (numFaces - firstFace)
+                                  : kMaxFacesPerBatch;
+
+        GX_Begin(GX_TRIANGLES, GX_VTXFMT0, uint16_t(batchFaces * 3));
+
         if (cpuSkinned)
         {
-            for (uint32_t i = 0; i < mesh->GetNumFaces(); ++i)
+            for (uint32_t i = firstFace; i < firstFace + batchFaces; ++i)
             {
                 GX_Position1x16(indices[i * 3 + 0]);
                 GX_Normal1x16(indices[i * 3 + 0]);
@@ -887,7 +901,7 @@ void GFX_DrawSkeletalMeshComp(SkeletalMesh3D* skeletalMeshComp)
         {
             const VertexSkinned* verts = mesh->GetVertices().data();
 
-            for (uint32_t i = 0; i < mesh->GetNumFaces(); ++i)
+            for (uint32_t i = firstFace; i < firstFace + batchFaces; ++i)
             {
                 uint8_t bone0 = 3 * verts[indices[i * 3 + 0]].mBoneIndices[0];
                 uint8_t bone1 = 3 * verts[indices[i * 3 + 1]].mBoneIndices[0];
@@ -914,6 +928,7 @@ void GFX_DrawSkeletalMeshComp(SkeletalMesh3D* skeletalMeshComp)
         }
 
         GX_End();
+        }
     }
 }
 

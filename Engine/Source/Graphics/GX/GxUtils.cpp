@@ -709,10 +709,22 @@ void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& out
 
     IndexType* indices = staticMesh->GetIndices();
 
+    // GX_Begin's vertex count is a u16, so one primitive can carry at most 65535 vertices --
+    // 21845 triangles, since 21845 * 3 is exactly 65535. A larger mesh used to be submitted in
+    // a single GX_Begin whose count silently wrapped: the list then declared far fewer vertices
+    // than it wrote, and the GP read the surplus vertex data as commands. That shows up as
+    // stray geometry shooting across the screen and "GFX FIFO: Unknown Opcode" in Dolphin.
+    //
+    // Split the mesh across as many primitives as it needs instead. Nothing else changes --
+    // the vertex data and its order are identical, it is only the batching that differs.
+    const uint32_t numFaces = staticMesh->GetNumFaces();
+    const uint32_t kMaxFacesPerBatch = 21845;
+    const uint32_t numBatches = (numFaces + kMaxFacesPerBatch - 1) / kMaxFacesPerBatch;
+
     // Generate a display list
-    uint32_t gxBeginSize = 3;
+    uint32_t gxBeginSize = 3 * (numBatches > 0 ? numBatches : 1);
     uint32_t elemSize = useColor ? (2 + 2 + 2 + 2 + 2) : (2 + 2 + 2 + 2);
-    uint32_t allocSize = gxBeginSize + (elemSize * staticMesh->GetNumFaces() * 3);
+    uint32_t allocSize = gxBeginSize + (elemSize * numFaces * 3);
     allocSize = (allocSize + 0x1f) & (~0x1f); // 32 byte aligned
     allocSize += 64; // Extra space to account for pipe flush
     displayList = memalign(32, allocSize);
@@ -722,11 +734,18 @@ void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& out
 
     GX_BeginDispList(displayList, allocSize);
 
-    GX_Begin(GX_TRIANGLES, GX_VTXFMT0, staticMesh->GetNumIndices());
+    for (uint32_t batch = 0; batch < numBatches; ++batch)
+    {
+    const uint32_t firstFace = batch * kMaxFacesPerBatch;
+    const uint32_t batchFaces = (numFaces - firstFace < kMaxFacesPerBatch)
+                              ? (numFaces - firstFace)
+                              : kMaxFacesPerBatch;
+
+    GX_Begin(GX_TRIANGLES, GX_VTXFMT0, uint16_t(batchFaces * 3));
 
     if (useColor)
     {
-        for (uint32_t i = 0; i < staticMesh->GetNumFaces(); ++i)
+        for (uint32_t i = firstFace; i < firstFace + batchFaces; ++i)
         {
             GX_Position1x16(uint16_t(indices[i * 3 + 0]));
             GX_Normal1x16(uint16_t(indices[i * 3 + 0]));
@@ -749,7 +768,7 @@ void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& out
     }
     else
     {
-        for (uint32_t i = 0; i < staticMesh->GetNumFaces(); ++i)
+        for (uint32_t i = firstFace; i < firstFace + batchFaces; ++i)
         {
             GX_Position1x16(uint16_t(indices[i * 3 + 0]));
             GX_Normal1x16(uint16_t(indices[i * 3 + 0]));
@@ -769,6 +788,7 @@ void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& out
     }
 
     GX_End();
+    }
 
     outSize = GX_EndDispList();
     OCT_ASSERT(outSize != 0);
