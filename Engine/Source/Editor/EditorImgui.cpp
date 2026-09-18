@@ -4384,7 +4384,7 @@ static void DrawViewportPanel()
 
             ImGui::SameLine();
 
-            if (ImGui::SmallButton("Reset"))
+            if (ImGui::SmallButton("Reset##NavSpeed"))
             {
                 viewport3d->SetFirstPersonMoveSpeed(10.0f);
             }
@@ -4392,6 +4392,58 @@ static void DrawViewportPanel()
             if (ImGui::IsItemHovered())
             {
                 ImGui::SetTooltip("Back to the default of 10.");
+            }
+        }
+
+        // Editor camera clip planes. The near plane defaults to 0.25, so anything closer than a
+        // quarter of a unit is sliced away -- which is constantly in the way when working on
+        // something small or looking out from inside a room, at exactly the distance you want to
+        // inspect from. This is the viewport camera only and does not touch any Camera3D in the
+        // scene, so it cannot change how the game renders.
+        if (cam != nullptr)
+        {
+            ImGui::Separator();
+            ImGui::Text("Clip Planes");
+
+            float nearZ = cam->GetNearZ();
+            float farZ = cam->GetFarZ();
+
+            ImGui::SetNextItemWidth(160.0f);
+
+            if (ImGui::SliderFloat("Near##ClipNear", &nearZ, 0.01f, 10.0f, "%.3f",
+                                   ImGuiSliderFlags_Logarithmic))
+            {
+                // Keep the planes ordered; a near at or past the far plane collapses the frustum.
+                cam->SetNearZ(glm::min(nearZ, cam->GetFarZ() - 0.01f));
+            }
+
+            ImGui::SetNextItemWidth(160.0f);
+
+            if (ImGui::SliderFloat("Far##ClipFar", &farZ, 10.0f, 100000.0f, "%.0f",
+                                   ImGuiSliderFlags_Logarithmic))
+            {
+                cam->SetFarZ(glm::max(farZ, cam->GetNearZ() + 0.01f));
+            }
+
+            if (ImGui::SmallButton("Reset##ClipPlanes"))
+            {
+                cam->SetNearZ(0.25f);
+                cam->SetFarZ(4096.0f);
+            }
+
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Back to the defaults of 0.25 and 4096.");
+            }
+
+            // The depth buffer's precision depends on the ratio between the planes, not their
+            // absolute values, so pulling the near plane very close is what causes z-fighting on
+            // distant geometry -- not pushing the far plane out.
+            if ((farZ / nearZ) > 200000.0f)
+            {
+                ImGui::TextColored(
+                    ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                    "Wide near/far ratio: expect z-fighting.");
             }
         }
 
