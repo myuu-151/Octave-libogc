@@ -126,7 +126,11 @@ public:
 
     // Move an asset into another directory: renames the file on disk and reparents the stub.
     // References to the asset are by name or UUID rather than path, so nothing else needs updating.
+    //
+    // Editor only. A stub only knows its name and directory in editor builds.
+#if EDITOR
     bool MoveAsset(AssetStub* stub, AssetDir* destDir);
+#endif
     void GatherScriptFilesRecursive(const std::string& dirPath, const std::string& relativePath, std::vector<std::string>& scriptFiles);
     std::vector<std::string> GetAvailableScriptFiles();
     std::vector<std::string> GetAvailableFontFiles();

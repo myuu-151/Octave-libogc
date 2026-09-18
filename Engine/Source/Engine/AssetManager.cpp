@@ -1284,6 +1284,9 @@ std::string AssetManager::GetParentDirectory(const std::string& path)
     return result;
 }
 
+// Editor only: AssetStub carries a name and a directory only in editor builds, since a packaged
+// game resolves assets by name and UUID and never needs to know where a file sits.
+#if EDITOR
 bool AssetManager::MoveAsset(AssetStub* stub, AssetDir* destDir)
 {
     if (stub == nullptr || destDir == nullptr)
@@ -1349,6 +1352,7 @@ bool AssetManager::MoveAsset(AssetStub* stub, AssetDir* destDir)
 
     return true;
 }
+#endif
 
 bool AssetManager::RenameDirectory(AssetDir* dir, const std::string& newName)
 {
