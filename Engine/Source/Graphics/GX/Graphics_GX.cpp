@@ -432,6 +432,19 @@ void GFX_CreateTextureResource(Texture* texture, std::vector<uint8_t>& data)
     }
 
     resource->mTplData = SYS_AlignedMalloc((uint32_t)data.size(), 32);
+
+    // Running out of memory here used to be a write through a null pointer: the copy below went
+    // ahead regardless and the game died inside memcpy at address 0, which says nothing about what
+    // actually went wrong. Say which texture could not be allocated and how big it was, and leave
+    // it untextured -- a missing texture is a far better failure than a corrupted heap, and it
+    // names the thing to make smaller.
+    if (resource->mTplData == nullptr)
+    {
+        LogError("Texture '%s': could not allocate %u bytes; out of memory.",
+                 texture->GetName().c_str(), (uint32_t)data.size());
+        return;
+    }
+
     memcpy(resource->mTplData, data.data(), data.size());
 
     TPL_OpenTPLFromMemory(&resource->mTplFile, resource->mTplData, (uint32_t)data.size());
