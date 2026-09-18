@@ -524,6 +524,32 @@ LoadingScreen* Renderer::GetLoadingScreenWidget()
     return mLoadingScreenWidget.Get();
 }
 
+void Renderer::DrawLoadingFrame(float progress, const char* message)
+{
+    if (mLoadingScreenWidget == nullptr)
+    {
+        return;
+    }
+
+    mLoadingScreenWidget->SetVisible(true);
+
+    if (message != nullptr)
+    {
+        mLoadingScreenWidget->SetMessage(message);
+    }
+
+    mLoadingScreenWidget->SetProgress(progress);
+
+    World* world = GetWorld(0);
+
+    if (world != nullptr)
+    {
+        // Same approach as the splash intro: drive a frame directly rather than waiting for the
+        // engine loop, which is not running while a synchronous load is in progress.
+        Render(world, 0);
+    }
+}
+
 void Renderer::DirtyAllWidgets()
 {
     if (mConsoleWidget != nullptr)

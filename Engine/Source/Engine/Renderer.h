@@ -56,6 +56,13 @@ public:
     void SetLoadingProgress(float progress);
     void SetLoadingMessage(const char* message);
     LoadingScreen* GetLoadingScreenWidget();
+
+    // Shows the loading screen and draws one frame immediately, outside the normal loop.
+    //
+    // Loading in this engine is synchronous, so it blocks the frame loop: a loading screen that is
+    // merely made visible before a load never gets drawn, because nothing renders until the load
+    // has already finished. Anything doing slow work in steps calls this between them.
+    void DrawLoadingFrame(float progress, const char* message = nullptr);
     bool IsConsoleEnabled();
 
     void DirtyAllWidgets();
