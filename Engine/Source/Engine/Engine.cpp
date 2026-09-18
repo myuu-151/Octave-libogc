@@ -497,9 +497,16 @@ bool Initialize()
     ForceLinkage();
 
 #if !EDITOR
-    // Play the boot splash over a clean black screen before the (blocking) scene
-    // load, so it shows first and the screen stays black through the load.
+    // Play the boot splash over a clean black screen before the (blocking) scene load.
     Renderer::Get()->RenderSplashIntro(GetWorld(0));
+
+    // The scene load pulls in every asset it references and can take several seconds off a disc.
+    // It blocks, so nothing draws for the whole of it and the screen used to simply sit black.
+    // Put the loading screen up and let the asset loader drive it.
+    Renderer::Get()->EnableLoadingScreen(true);
+    Renderer::Get()->SetLoadingMessage("Loading...");
+    Renderer::Get()->SetLoadingProgress(0.0f);
+    AssetManager::Get()->EnableLoadProgressPump(true);
 
     Scene* defaultScene = nullptr;
 
@@ -550,6 +557,12 @@ bool Initialize()
     {
         LogWarning("No default scene found.");
     }
+
+    // The scene is up, so stop pumping frames from the asset loader and take the screen down.
+    // Anything loaded from here on is the game's business, and a game that wants a loading screen
+    // of its own can put one up itself.
+    AssetManager::Get()->EnableLoadProgressPump(false);
+    Renderer::Get()->EnableLoadingScreen(false);
 
 #endif
 

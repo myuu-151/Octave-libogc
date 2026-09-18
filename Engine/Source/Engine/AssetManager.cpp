@@ -919,9 +919,45 @@ Asset* AssetManager::LoadAsset(AssetStub& stub)
             stub.mAsset->EnsureUuid();
             stub.mUuid = stub.mAsset->GetUuid();
         }
+
+        // Draw a frame every so often while a blocking load is in progress, so the loading screen
+        // is actually seen. Loading a scene pulls in everything it references and can take several
+        // seconds off a disc, and without this the screen simply stays black for all of it.
+        //
+        // Every few assets rather than every one: a frame costs far more than reading a small
+        // asset, and the cost lands squarely on the load this is meant to be reporting.
+        if (mLoadPumpEnabled && !mLoadPumpDrawing)
+        {
+            ++mLoadPumpCount;
+
+            if ((mLoadPumpCount % 4) == 0 && Renderer::Get() != nullptr)
+            {
+                // Drawing can itself ask for an asset, which would come straight back through
+                // here; the guard makes that a plain load rather than a nested frame.
+                mLoadPumpDrawing = true;
+
+                // The number of assets discovered is the only total available before the load
+                // starts. Not all of them will be loaded, so the bar runs ahead of the truth
+                // rather than stalling at the end, which is the better way round.
+                const float total = (float)glm::max<size_t>(1, mUuidMap.size());
+                Renderer::Get()->DrawLoadingFrame(float(mLoadPumpCount) / total, "Loading...");
+
+                mLoadPumpDrawing = false;
+            }
+        }
     }
 
     return stub.mAsset;
+}
+
+void AssetManager::EnableLoadProgressPump(bool enable)
+{
+    mLoadPumpEnabled = enable;
+
+    if (enable)
+    {
+        mLoadPumpCount = 0;
+    }
 }
 
 // UUID-based lookup methods

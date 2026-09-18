@@ -153,6 +153,11 @@ public:
 
     bool IsPurging() const;
 
+    // While this is on, loading an asset from disc occasionally draws a frame, so the loading
+    // screen is updated during a blocking load instead of the screen sitting black through it.
+    // Startup turns it on around the scene load and off again once the scene is up.
+    void EnableLoadProgressPump(bool enable);
+
 protected:
 
     static ThreadFuncRet AsyncLoadThreadFunc(void* in);
@@ -168,6 +173,9 @@ protected:
     std::vector<Asset*> mTransientAssets;
     AssetDir* mRootDirectory = nullptr;
     bool mPurging = false;
+    bool mLoadPumpEnabled = false;
+    bool mLoadPumpDrawing = false;   // guards against a draw triggering another load
+    uint32_t mLoadPumpCount = 0;
     bool mDestructing = false;
     std::deque<AsyncLoadRequest*> mBeginLoadQueue;
     std::deque<AsyncLoadRequest*> mEndLoadQueue;
