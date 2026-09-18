@@ -610,29 +610,33 @@ void GatherNonDefaultProperties(Node* node, std::vector<Property>& props, NodePt
     }
 }
 
-void GatherSubSceneOverrides(Node* node, Node* sceneRoot, std::vector<SubSceneOverride>& overs)
+// Walk an instanced subscene alongside a pristine copy of the scene it came from, pairing nodes as
+// we go, and record what differs.
+//
+// The pairing is by child index rather than by name, and the path is spelled with the names from
+// the source scene rather than the instance's. That distinction is the whole point: a node renamed
+// in the instance is a perfectly ordinary override -- Name is just another property -- but the path
+// is later resolved against a fresh instantiation of the source scene, both when saving and again
+// when loading. Spelling it with the new name asks that scene for a node it has never heard of, so
+// renaming a child inside an instance used to assert on save and silently lose every override on
+// that node if it got as far as loading.
+//
+// Instantiating a scene reproduces its children in order, and adding a child to an instance breaks
+// the scene link, so the two trees stay in step. If they ever do not, the extra node simply has
+// nothing to be compared against and is skipped.
+static void GatherSubSceneOverridesRecursive(
+    Node* node,
+    Node* defaultNode,
+    const std::string& path,
+    std::vector<SubSceneOverride>& overs)
 {
-    OCT_ASSERT(node && sceneRoot);
-    OCT_ASSERT(node != sceneRoot);
-
-    if (node == nullptr)
+    if (node == nullptr || defaultNode == nullptr)
         return;
 
     SubSceneOverride over;
-    over.mPath = FindRelativeNodePath(sceneRoot, node);
-    OCT_ASSERT(over.mPath != "");
+    over.mPath = path;
 
-    NodePtr defaultSceneRoot = sceneRoot->GetScene()->Instantiate();
-    NodePtr defaultNode = ResolvePtr(ResolveNodePath(defaultSceneRoot.Get(), over.mPath));
-
-    if (defaultNode == nullptr)
-    {
-        LogError("Could not find ref node in GatherSubSceneOverrides()");
-        OCT_ASSERT(false);
-        return;
-    }
-
-    GatherNonDefaultProperties(node, over.mProperties, defaultNode);
+    GatherNonDefaultProperties(node, over.mProperties, ResolvePtr(defaultNode));
 
     if (node->As<StaticMesh3D>() && defaultNode->As<StaticMesh3D>())
     {
@@ -657,8 +661,61 @@ void GatherSubSceneOverrides(Node* node, Node* sceneRoot, std::vector<SubSceneOv
 
     for (uint32_t i = 0; i < node->GetNumChildren(); ++i)
     {
-        GatherSubSceneOverrides(node->GetChild(i), sceneRoot, overs);
+        if (i >= defaultNode->GetNumChildren())
+        {
+            // A node that exists in the instance but not in the scene it came from. There is
+            // nothing to diff it against, so there is no override to record for it.
+            break;
+        }
+
+        Node* child = node->GetChild(i);
+        Node* defaultChild = defaultNode->GetChild(i);
+
+        if (child == nullptr || defaultChild == nullptr)
+            continue;
+
+        const std::string childPath = path.empty()
+                                    ? defaultChild->GetName()
+                                    : (path + "/" + defaultChild->GetName());
+
+        GatherSubSceneOverridesRecursive(child, defaultChild, childPath, overs);
     }
+}
+
+void GatherSubSceneOverrides(Node* node, Node* sceneRoot, std::vector<SubSceneOverride>& overs)
+{
+    OCT_ASSERT(node && sceneRoot);
+    OCT_ASSERT(node != sceneRoot);
+
+    if (node == nullptr || sceneRoot == nullptr)
+        return;
+
+    Scene* scene = sceneRoot->GetScene();
+
+    if (scene == nullptr)
+        return;
+
+    NodePtr defaultSceneRoot = scene->Instantiate();
+
+    if (defaultSceneRoot == nullptr)
+        return;
+
+    // Find this node's opposite number in the pristine copy by position, not by name, so that a
+    // renamed node is still matched with the node it was made from.
+    const int32_t childIndex = sceneRoot->FindChildIndex(node);
+
+    if (childIndex < 0 || childIndex >= (int32_t)defaultSceneRoot->GetNumChildren())
+    {
+        LogWarning("Subscene instance has a node the source scene does not; skipping its overrides.");
+        return;
+    }
+
+    Node* defaultNode = defaultSceneRoot->GetChild(childIndex);
+
+    if (defaultNode == nullptr)
+        return;
+
+    GatherSubSceneOverridesRecursive(node, defaultNode, defaultNode->GetName(), overs);
 }
 
 void ApplySubSceneOverride(Node* sceneRoot, const SubSceneOverride& over)
