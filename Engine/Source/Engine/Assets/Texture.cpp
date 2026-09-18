@@ -256,10 +256,20 @@ void CookTexture(
             format = (PixelFormat)forcedFormat;
         }
 
-        // Alpha doesn't seem to be working with CMPR textures with gxtexconv, but I think
-        // the CMPR does support 1 bit alpha. So I'm not sure what the problem is, but for now we can use a slightly
-        // more compressed format for these.
-        if (format == PixelFormat::CMPR && platform == Platform::Wii && !opaque)
+        // CMPR carries at most 1 bit of alpha through gxtexconv, so a texture with any
+        // translucency in it loses that alpha entirely and reaches the TEV as a solid 255. A
+        // Translucent material then has nothing left to blend with except the opacity slider,
+        // and renders opaque at opacity 1 no matter what its texture looks like.
+        //
+        // Fall back to RGB5A3 (RGBA5551 here) for those, which spends 16 bits a texel instead of
+        // 4 but gives translucent texels 3 bits of alpha. Opaque textures are untouched and stay
+        // at 4 bits, so this only costs memory where alpha is actually used.
+        //
+        // This used to be gated to Wii. There is no hardware difference behind that -- GameCube's
+        // Flipper and Wii's Hollywood share these texture formats and the same converter -- so a
+        // GameCube build silently lost every soft alpha. The N3DS branch below already picks
+        // etc1 vs etc1a4 on opacity alone, which is the same decision made correctly.
+        if (format == PixelFormat::CMPR && !opaque)
         {
             format = PixelFormat::RGBA5551;
         }
