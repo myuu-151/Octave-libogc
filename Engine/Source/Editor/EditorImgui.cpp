@@ -3742,6 +3742,35 @@ static void DrawPropertiesPanel()
                     ImGui::Text("Bits Per Sample: %d", soundWave->GetBitsPerSample());
                     ImGui::Text("Sample Rate: %d", soundWave->GetSampleRate());
                 }
+
+                // A separate if, not part of the chain above: a Node3D is often also a mesh node,
+                // and this should appear either way.
+                Node3D* node3d = obj->As<Node3D>();
+
+                if (node3d != nullptr)
+                {
+                    const glm::vec3 scale = node3d->GetScale();
+                    const bool alreadyUnit = (scale == glm::vec3(1.0f));
+
+                    ImGui::BeginDisabled(alreadyUnit);
+
+                    if (ImGui::Button("Apply Scale"))
+                    {
+                        ActionManager::Get()->ApplyScaleToSubtree(node3d);
+                    }
+
+                    ImGui::EndDisabled();
+
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    {
+                        ImGui::SetTooltip(
+                            alreadyUnit
+                            ? "Scale is already 1."
+                            : "Bake this scale into the meshes, so this node and everything under it\n"
+                              "reads 1 without changing size. Modifies and saves the mesh assets,\n"
+                              "which affects any other node using them. Cannot be undone.");
+                    }
+                }
             }
 
             ImGui::EndTabItem();

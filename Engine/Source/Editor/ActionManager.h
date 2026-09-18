@@ -63,6 +63,10 @@ public:
     void EXE_SetWorldRotation(Node3D* node, glm::quat rot);
     void EXE_SetWorldPosition(Node3D* node, glm::vec3 pos);
     void EXE_SetWorldScale(Node3D* node, glm::vec3 scale);
+
+    // Bake a node's scale down through its subtree, so the node and every 3D node under it end at
+    // scale 1 without anything changing size or position. Modifies the mesh assets involved.
+    void ApplyScaleToSubtree(Node3D* node);
     void EXE_UnlinkScene(Node* node);
     void EXE_SetInstanceColors(const std::vector<ActionSetInstanceColorsData>& data);
     void EXE_SetInstanceData(InstancedMesh3D* instMesh, int32_t startIndex, const std::vector<MeshInstanceData>& data);

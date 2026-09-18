@@ -465,6 +465,107 @@ void StaticMesh::Create()
     ComputeBounds();
 }
 
+#if EDITOR
+void StaticMesh::ApplyScale(glm::vec3 scale)
+{
+    if (scale == glm::vec3(1.0f))
+    {
+        return;
+    }
+
+    if (scale.x == 0.0f || scale.y == 0.0f || scale.z == 0.0f)
+    {
+        LogError("Mesh %s: cannot apply a zero scale.", GetName().c_str());
+        return;
+    }
+
+    // Normals do not transform like positions under a non-uniform scale -- they need the inverse,
+    // renormalized afterwards. For a uniform scale this reduces to leaving them alone, but doing it
+    // unconditionally keeps the one path correct for both.
+    const glm::vec3 invScale = 1.0f / scale;
+
+    if (mHasVertexColor)
+    {
+        VertexColor* verts = GetColorVertices();
+        for (uint32_t i = 0; i < mNumVertices; ++i)
+        {
+            verts[i].mPosition *= scale;
+            verts[i].mNormal = glm::normalize(verts[i].mNormal * invScale);
+        }
+    }
+    else
+    {
+        Vertex* verts = GetVertices();
+        for (uint32_t i = 0; i < mNumVertices; ++i)
+        {
+            verts[i].mPosition *= scale;
+            verts[i].mNormal = glm::normalize(verts[i].mNormal * invScale);
+        }
+    }
+
+    // Authored collision shapes carry their own dimensions, so they have to be scaled alongside the
+    // geometry or the mesh would keep colliding at its old size. SaveStream reads these back out of
+    // the live Bullet shapes (getHalfExtentsWithMargin, getRadius), and both of those already fold
+    // in local scaling, so setting it here is what persists.
+    const btVector3 btScale(scale.x, scale.y, scale.z);
+
+    if (mCollisionShape != nullptr)
+    {
+        if (mCollisionShape->getShapeType() == COMPOUND_SHAPE_PROXYTYPE)
+        {
+            btCompoundShape* compound = static_cast<btCompoundShape*>(mCollisionShape);
+
+            for (int32_t i = 0; i < compound->getNumChildShapes(); ++i)
+            {
+                btCollisionShape* child = compound->getChildShape(i);
+                child->setLocalScaling(child->getLocalScaling() * btScale);
+
+                // The child's offset from the mesh origin scales too, otherwise the pieces of a
+                // compound keep their old spacing around correctly resized shapes.
+                btTransform childTransform = compound->getChildTransform(i);
+                childTransform.setOrigin(childTransform.getOrigin() * btScale);
+                compound->updateChildTransform(i, childTransform, false);
+            }
+
+            compound->recalculateLocalAabb();
+        }
+        else
+        {
+            mCollisionShape->setLocalScaling(mCollisionShape->getLocalScaling() * btScale);
+        }
+
+        // A sphere has one radius and cannot represent a non-uniform scale, so Bullet will pick a
+        // single axis and the collision will no longer match what is drawn.
+        if (scale.x != scale.y || scale.y != scale.z)
+        {
+            LogWarning("Mesh %s: non-uniform scale applied to collision; sphere shapes cannot "
+                       "represent this and will not match the visual mesh.", GetName().c_str());
+        }
+    }
+
+    // The triangle collision mesh is built from the vertices, so it just needs rebuilding.
+    DestroyTriangleCollisionShape();
+
+    if (ShouldGenerateTriangleCollision())
+    {
+        CreateTriangleCollisionShape();
+    }
+
+    // Re-upload rather than going through Destroy()/Create(): Destroy() frees the vertex arrays and
+    // clears the material, which would throw away the geometry this just rewrote.
+    GFX_DestroyStaticMeshResource(this);
+    GFX_CreateStaticMeshResource(
+        this,
+        mHasVertexColor,
+        mNumVertices,
+        mHasVertexColor ? (void*)GetColorVertices() : (void*)GetVertices(),
+        mNumIndices,
+        mIndices);
+
+    ComputeBounds();
+}
+#endif
+
 void StaticMesh::Destroy()
 {
     Asset::Destroy();

@@ -1672,6 +1672,100 @@ void ActionManager::EXE_SetWorldScale(Node3D* comp, glm::vec3 scale)
     ActionManager::Get()->ExecuteAction(action);
 }
 
+namespace
+{
+    struct ApplyScaleEntry
+    {
+        Node3D* mNode = nullptr;
+        glm::vec3 mParentScale = glm::vec3(1.0f);  // ancestors' scale, which this node's position sits inside
+        glm::vec3 mMeshScale = glm::vec3(1.0f);    // total scale to bake into this node's mesh
+    };
+
+    void GatherApplyScale(Node3D* node, glm::vec3 parentScale, std::vector<ApplyScaleEntry>& outEntries)
+    {
+        ApplyScaleEntry entry;
+        entry.mNode = node;
+        entry.mParentScale = parentScale;
+        entry.mMeshScale = parentScale * node->GetScale();
+        outEntries.push_back(entry);
+
+        for (uint32_t i = 0; i < node->GetNumChildren(); ++i)
+        {
+            Node3D* child = node->GetChild(i)->As<Node3D>();
+
+            if (child != nullptr)
+            {
+                GatherApplyScale(child, entry.mMeshScale, outEntries);
+            }
+        }
+    }
+}
+
+void ActionManager::ApplyScaleToSubtree(Node3D* node)
+{
+    if (node == nullptr)
+    {
+        return;
+    }
+
+    std::vector<ApplyScaleEntry> entries;
+    GatherApplyScale(node, glm::vec3(1.0f), entries);
+
+    // Mesh assets are shared. If two nodes in this subtree use the same mesh at different scales,
+    // there is no single set of vertices that satisfies both -- baking would silently resize one of
+    // them. Refuse the whole operation rather than apply half of it.
+    std::unordered_map<StaticMesh*, glm::vec3> meshScales;
+
+    for (const ApplyScaleEntry& entry : entries)
+    {
+        StaticMesh3D* meshNode = entry.mNode->As<StaticMesh3D>();
+        StaticMesh* mesh = meshNode ? meshNode->GetStaticMesh() : nullptr;
+
+        if (mesh == nullptr || entry.mMeshScale == glm::vec3(1.0f))
+        {
+            continue;
+        }
+
+        auto existing = meshScales.find(mesh);
+
+        if (existing != meshScales.end() && existing->second != entry.mMeshScale)
+        {
+            LogError("Apply Scale: %s is used at two different scales in this subtree. "
+                     "Duplicate the mesh asset first, or apply to each branch separately.",
+                     mesh->GetName().c_str());
+            return;
+        }
+
+        meshScales[mesh] = entry.mMeshScale;
+
+        // A skeletal mesh keeps its geometry in bind pose against a skeleton, so scaling the
+        // vertices alone would not move the bones with them.
+        if (entry.mNode->As<SkeletalMesh3D>() != nullptr)
+        {
+            LogError("Apply Scale: %s is a skeletal mesh, which this cannot bake.",
+                     entry.mNode->GetName().c_str());
+            return;
+        }
+    }
+
+    // Bake each mesh once, then flatten the transforms. Positions are expressed inside the scale
+    // being removed, so they have to be scaled by it to stay where they are.
+    for (auto& pair : meshScales)
+    {
+        pair.first->ApplyScale(pair.second);
+        AssetManager::Get()->SaveAsset(pair.first->GetName());
+    }
+
+    for (const ApplyScaleEntry& entry : entries)
+    {
+        entry.mNode->SetPosition(entry.mNode->GetPosition() * entry.mParentScale);
+        entry.mNode->SetScale(glm::vec3(1.0f));
+    }
+
+    LogDebug("Apply Scale: flattened %u node(s), baked %u mesh asset(s).",
+             (uint32_t)entries.size(), (uint32_t)meshScales.size());
+}
+
 void ActionManager::EXE_UnlinkScene(Node* node)
 {
     if (node->IsSceneLinked())

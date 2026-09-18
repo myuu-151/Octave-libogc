@@ -67,6 +67,13 @@ public:
 
     static bool HandlePropChange(Datum* datum, uint32_t index, const void* newValue);
 
+#if EDITOR
+    // Bake a scale into the geometry itself, so a node can carry it at scale 1 without changing
+    // size. Rewrites vertex positions and normals, rescales the collision shapes and bounds, and
+    // re-uploads the mesh. Editor-only: it modifies the asset, which then needs saving.
+    void ApplyScale(glm::vec3 scale);
+#endif
+
 private:
 
     bool ShouldGenerateTriangleCollision() const;
