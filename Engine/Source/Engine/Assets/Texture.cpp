@@ -147,7 +147,14 @@ void CookTexture(
         platform == Platform::Wii ||
         platform == Platform::N3DS)
     {
-        bool forceHq = texture->IsForcedHighQuality();
+        // The engine splash is exempt. It is drawn full screen for a moment at boot, where any
+        // reduction is as visible as it ever gets, and it costs nothing after that -- it is not
+        // competing for texture memory with a scene, because there is no scene yet. A project
+        // turning its textures down to fit the hardware is not asking for its splash to be soft,
+        // and having to remember to tick Force High Quality on it in every project is a trap.
+        const bool isEngineSplash = (texture->GetName() == "T_OctaveSplash");
+
+        bool forceHq = texture->IsForcedHighQuality() || isEngineSplash;
         int32_t downsampleFactor = texture->GetLowQualityDownsampleFactor();
         int32_t consoleMaxTextureSize = GetEngineConfig()->mLqMaxTextureSize;
 
@@ -250,8 +257,13 @@ void CookTexture(
         // a texel -- a single 512x512 would fill Flipper's 1 MB texture cache on its own -- so a
         // project targeting this hardware almost always wants CMPR instead, at 4 bits.
         // Force High Quality opts a texture out, as it does for the downsampling above.
+        // The engine splash opts out of this as well as of the downsampling. It is a full screen
+        // image, which is where block compression shows worst, and it is gone before anything else
+        // needs the memory.
+        const bool isEngineSplash = (texture->GetName() == "T_OctaveSplash");
+
         const int32_t forcedFormat = GetEngineConfig()->mLqTextureFormat;
-        if (forcedFormat >= 0 && !texture->IsForcedHighQuality())
+        if (forcedFormat >= 0 && !texture->IsForcedHighQuality() && !isEngineSplash)
         {
             format = (PixelFormat)forcedFormat;
         }
