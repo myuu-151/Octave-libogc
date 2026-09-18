@@ -1316,7 +1316,31 @@ void World::Update(float deltaTime)
     if (gameTickEnabled)
     {
         SCOPED_FRAME_STAT("Physics");
-        mDynamicsWorld->stepSimulation(deltaTime, 2);
+
+        // A long frame must not starve the simulation.
+        //
+        // stepSimulation will only ever run maxSubSteps of its fixed timestep per call, so with
+        // the default 1/60 step and two substeps it can advance at most 33ms of simulation however
+        // long the frame actually took. Below 30fps the physics silently falls behind real time and
+        // resolves contacts badly -- and since the frames that are slow are exactly the ones with
+        // the most bodies in them, the simulation behaves differently precisely when it is busiest.
+        // It shows up as bodies that will not settle when a scene is heavy but settle perfectly
+        // when it is light, which reads as a tuning problem and is not one.
+        //
+        // A 1/30 step on console covers a 66ms frame in the same two substeps. Coarser, but a
+        // consistent simulation is worth more than an accurate one that changes with the frame
+        // rate, and this hardware is not going to hold 60fps with a pile of bodies on screen.
+#if PLATFORM_DOLPHIN
+        const float fixedStep = 1.0f / 30.0f;
+#else
+        const float fixedStep = 1.0f / 60.0f;
+#endif
+
+        // And cap the catch-up after a hitch, so a stall does not turn into a burst of simulation
+        // that is itself slow enough to cause the next one.
+        const float physicsDelta = glm::min(deltaTime, 0.25f);
+
+        mDynamicsWorld->stepSimulation(physicsDelta, 2, fixedStep);
     }
 
     if (gameTickEnabled)
