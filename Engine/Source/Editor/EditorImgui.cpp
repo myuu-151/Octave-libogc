@@ -4354,6 +4354,47 @@ static void DrawViewportPanel()
             LogDebug("Preview lighting %s", GetEditorState()->mPreviewLighting ? "enabled." : "disabled.");
         }
 
+        // Fly-camera speed, for right-mouse + WASD. This was reachable only by scrolling while
+        // already holding right mouse, which is awkward when the current speed is wildly wrong for
+        // the scene -- a speed suited to a room is unusable in a landscape and vice versa.
+        //
+        // Logarithmic, because the usable range spans four orders of magnitude and a linear slider
+        // would bunch everything below 50 into the first few pixels.
+        Viewport3D* viewport3d = GetEditorState()->GetViewport3D();
+
+        if (viewport3d != nullptr)
+        {
+            ImGui::Separator();
+            ImGui::Text("Navigation Speed");
+
+            float navSpeed = viewport3d->GetFirstPersonMoveSpeed();
+
+            ImGui::SetNextItemWidth(160.0f);
+
+            if (ImGui::SliderFloat(
+                    "##NavSpeed",
+                    &navSpeed,
+                    0.1f,
+                    1000.0f,
+                    "%.2f",
+                    ImGuiSliderFlags_Logarithmic))
+            {
+                viewport3d->SetFirstPersonMoveSpeed(navSpeed);
+            }
+
+            ImGui::SameLine();
+
+            if (ImGui::SmallButton("Reset"))
+            {
+                viewport3d->SetFirstPersonMoveSpeed(10.0f);
+            }
+
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Back to the default of 10.");
+            }
+        }
+
         if (GetEditorState()->GetEditorMode() == EditorMode::Scene2D)
         {
             if (ImGui::Selectable("Reset 2D Viewport"))

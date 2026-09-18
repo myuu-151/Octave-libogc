@@ -17,6 +17,11 @@ public:
     float GetFocalDistance() const;
     void ToggleTransformMode();
 
+
+    // Fly-camera speed for right-mouse + WASD. Exposed so the View menu can offer a slider;
+    // the setter clamps to the same range the scroll-wheel adjustment uses.
+    float GetFirstPersonMoveSpeed() const { return mFirstPersonMoveSpeed; }
+    void SetFirstPersonMoveSpeed(float speed);
 protected:
 
     static constexpr float sDefaultFocalDistance = 10.0f;

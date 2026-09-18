@@ -665,6 +665,11 @@ void Viewport3D::HandleDefaultControls()
     }
 }
 
+void Viewport3D::SetFirstPersonMoveSpeed(float speed)
+{
+    mFirstPersonMoveSpeed = glm::clamp(speed, 0.1f, 1000.0f);
+}
+
 void Viewport3D::HandlePilotControls()
 {
     Camera3D* camera = GetWorld(0)->GetActiveCamera();
