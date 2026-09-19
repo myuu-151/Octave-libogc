@@ -94,6 +94,16 @@ public:
     glm::vec3 GetGravity() const;
 
     btDynamicsWorld* GetDynamicsWorld();
+
+    // Whether overlap and collision callbacks are raised at all.
+    //
+    // Raising them costs a second, complete narrowphase pass every frame on top of the one
+    // stepSimulation already ran. That is cheap when little is touching and expensive exactly when
+    // a lot is -- at 42 dynamic bodies in one pile it was measured at 9-16ms of the frame on a
+    // GameCube. A project that uses neither BeginOverlap nor collision handlers can turn it off and
+    // keep the time.
+    void EnableCollisionEvents(bool enable) { mCollisionEventsEnabled = enable; }
+    bool AreCollisionEventsEnabled() const { return mCollisionEventsEnabled; }
     btDbvtBroadphase* GetBroadphase();
     void PurgeOverlaps(Primitive3D* prim);
 
@@ -223,6 +233,7 @@ private:
     // Physics
     btDefaultCollisionConfiguration* mCollisionConfig = nullptr;
     btCollisionDispatcher* mCollisionDispatcher = nullptr;
+    bool mCollisionEventsEnabled = true;
     btDbvtBroadphase* mBroadphase = nullptr;
     btSequentialImpulseConstraintSolver* mSolver = nullptr;
     btDiscreteDynamicsWorld* mDynamicsWorld = nullptr;

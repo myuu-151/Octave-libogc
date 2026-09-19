@@ -1360,7 +1360,7 @@ void World::Update(float deltaTime)
         mDynamicsWorld->stepSimulation(physicsDelta, maxSubSteps, fixedStep);
     }
 
-    if (gameTickEnabled)
+    if (gameTickEnabled && mCollisionEventsEnabled)
     {
         SCOPED_FRAME_STAT("Collisions");
         mCollisionDispatcher->dispatchAllCollisionPairs(
