@@ -304,7 +304,30 @@ void CookTexture(
         // compressed -- and stays at a quarter of the size it would be as RGB5A3. That is worth
         // having for a large cutout: a 512x1024 costs 2.7MB as RGBA8, 1.3MB as RGB5A3 and 340KB
         // as CMPR.
-        if (format == PixelFormat::CMPR && !opaque && !maskedAlpha)
+        // CMPR can carry a bit of alpha; gxtexconv does not put one there.
+        //
+        // The format is DXT1, which encodes transparency when its first
+        // endpoint is not greater than its second -- index 3 then means
+        // transparent. So a mask ought to survive compression, which is what
+        // the comment above assumed.
+        //
+        // It does not. Feeding gxtexconv v1.0.6 a PNG that is half fully
+        // transparent and asking for colfmt=14 gives back 256 blocks of which
+        // every one is written in the mode that COULD encode transparency and
+        // not one uses the transparent index. The same holds for real assets:
+        // 65536 blocks of an alpha-masked texture, none transparent. There is
+        // no flag for it either -- the converter takes only colfmt, mipmap,
+        // lod bounds and size.
+        //
+        // So a cutout's transparent background arrives as solid black.
+        //
+        // That is invisible on a single-texture material and ruins any layered
+        // one: each Decal stage blends by texture alpha, so an all-opaque
+        // layer overwrites everything beneath it and only the last texture in
+        // the material is ever seen.
+        //
+        // So CMPR is now only for textures with no alpha at all.
+        if (format == PixelFormat::CMPR && !opaque)
         {
             format = PixelFormat::RGBA5551;
         }
