@@ -753,6 +753,39 @@ btCollisionShape* Primitive3D::GetCollisionShape()
     return mCollisionShape;
 }
 
+void Primitive3D::RecreateRigidBody()
+{
+    // Nothing to rebuild, and Create()/EnableRigidBody will make one when it is needed.
+    if (mRigidBody == nullptr)
+    {
+        return;
+    }
+
+    const bool physicsWasEnabled = mPhysicsEnabled;
+
+    EnableRigidBody(false);
+
+    delete mRigidBody;
+    mRigidBody = nullptr;
+
+    // The motion state goes with it. Bullet writes the body's transform here every step, so a
+    // stale one hands the new body the pose the old one finished in.
+    if (mMotionState != nullptr)
+    {
+        delete mMotionState;
+        mMotionState = nullptr;
+    }
+
+    if (physicsWasEnabled)
+    {
+        mMotionState = new OctaveMotionState(mTransform);
+    }
+
+    // Built from the current settings, in the current state -- so the mass and inertia come out of
+    // the shape that is attached now rather than out of whatever the body was holding.
+    EnableRigidBody(true);
+}
+
 void Primitive3D::SetCollisionShape(btCollisionShape* newShape)
 {
     EnableRigidBody(false);

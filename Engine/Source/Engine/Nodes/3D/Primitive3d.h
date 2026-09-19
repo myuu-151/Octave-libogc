@@ -94,6 +94,17 @@ public:
     void SetRollingFriction(float rollingFriction);
     void SetLinearFactor(glm::vec3 linearFactor);
     void SetAngularFactor(glm::vec3 angularFactor);
+
+    // Throw the rigid body away and build a new one from the primitive's current settings.
+    //
+    // A body is created once and then kept: enabling and disabling physics only adds and removes
+    // it from the world. That is what you want for something switched on and off, but it means a
+    // primitive that is simulated, parked and simulated again is never a clean slate -- it carries
+    // the mass, inertia, damping, sleeping state and accumulated forces it was last left with, and
+    // several of the setters decline to do anything when the value has not changed.
+    //
+    // Call this when a reused primitive has to behave the way it did the first time.
+    void RecreateRigidBody();
     void SetCollisionGroup(uint8_t group);
     void SetCollisionMask(uint8_t mask);
 
