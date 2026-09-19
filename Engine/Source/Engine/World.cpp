@@ -1327,20 +1327,26 @@ void World::Update(float deltaTime)
         // It shows up as bodies that will not settle when a scene is heavy but settle perfectly
         // when it is light, which reads as a tuning problem and is not one.
         //
-        // A 1/30 step on console covers a 66ms frame in the same two substeps. Coarser, but a
-        // consistent simulation is worth more than an accurate one that changes with the frame
-        // rate, and this hardware is not going to hold 60fps with a pile of bodies on screen.
-#if PLATFORM_DOLPHIN
-        const float fixedStep = 1.0f / 30.0f;
-#else
+        // A coarser step was tried here, to cover a long frame in the same two substeps. It made
+        // things worse, and badly: halving the rate doubles how far anything travels between
+        // collision tests, and small fast objects then pass through each other and through the
+        // floor. A simulation that is consistent and wrong is not an improvement on one that is
+        // occasionally starved, so the step stays where it was.
+        //
+        // Bodies small or fast enough for this to matter should use continuous collision detection,
+        // which sweeps the shape along its path rather than testing where it lands.
         const float fixedStep = 1.0f / 60.0f;
-#endif
+
+        // More substeps instead, so a long frame is caught up rather than dropped. The cost is
+        // bounded by maxSubSteps and by the cap below, and it buys back the consistency the
+        // coarser step was reaching for without giving up the accuracy.
+        const int32_t maxSubSteps = 4;
 
         // And cap the catch-up after a hitch, so a stall does not turn into a burst of simulation
         // that is itself slow enough to cause the next one.
         const float physicsDelta = glm::min(deltaTime, 0.25f);
 
-        mDynamicsWorld->stepSimulation(physicsDelta, 2, fixedStep);
+        mDynamicsWorld->stepSimulation(physicsDelta, maxSubSteps, fixedStep);
     }
 
     if (gameTickEnabled)
