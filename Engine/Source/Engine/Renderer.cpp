@@ -1304,6 +1304,18 @@ int32_t Renderer::FrustumCullDraws(const CameraFrustum& frustum, std::vector<Deb
 
     for (int32_t i = int32_t(drawData.size()) - 1; i >= 0; --i)
     {
+        // A debug draw without a mesh has no bounds to cull against and nothing to draw.
+        //
+        // This used to be dereferenced blind, which made the collision debug view crash the moment
+        // the scene contained a primitive with no static mesh of its own -- a Box3D collider, for
+        // instance, which is exactly the sort of thing that view exists to show. The tool for
+        // finding problems could not be switched on in a scene that had any.
+        if (drawData[i].mMesh == nullptr)
+        {
+            drawData.erase(drawData.begin() + i);
+            continue;
+        }
+
         Bounds meshBounds = drawData[i].mMesh->GetBounds();
         Bounds worldBounds;
         worldBounds.mCenter = drawData[i].mTransform * glm::vec4(meshBounds.mCenter, 1.0f);
