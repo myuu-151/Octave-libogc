@@ -638,6 +638,21 @@ void Primitive3D::SyncRigidBodyMass()
 
     if (shape && shape->getShapeType() != EMPTY_SHAPE_PROXYTYPE)
     {
+        // Scale the shape before asking it for its inertia, not after.
+        //
+        // calculateLocalInertia reads the shape's extents, and those extents include the local
+        // scaling -- so an unscaled shape reports the inertia of a body the size it was authored
+        // at, rather than the size it is actually simulated at. SyncRigidBodyTransform is what
+        // applies the scaling, and it runs after this, so a freshly created body got the wrong
+        // tensor and kept it.
+        //
+        // Inertia goes as the square of the size, so the error is the square of the scale. On a
+        // node scaled to a hundredth this made the body ten thousand times harder to turn than it
+        // should be, which is indistinguishable from a body that cannot rotate at all: it falls
+        // correctly, because mass is right, and then slides about without ever tumbling.
+        const glm::vec3 worldScale = GetWorldScale();
+        shape->setLocalScaling(btVector3(worldScale.x, worldScale.y, worldScale.z));
+
         shape->calculateLocalInertia(rigidBodyMass, localInertia);
     }
 
