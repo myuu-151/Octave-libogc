@@ -1340,7 +1340,18 @@ void World::Update(float deltaTime)
         // More substeps instead, so a long frame is caught up rather than dropped. The cost is
         // bounded by maxSubSteps and by the cap below, and it buys back the consistency the
         // coarser step was reaching for without giving up the accuracy.
-        const int32_t maxSubSteps = 4;
+        //
+        // Fewer of them once the frame is already long, because catching up is what turns a slow
+        // frame into a slower one. stepSimulation is asked for as many fixed steps as the elapsed
+        // time needs, so a frame that ran long orders more simulation than the frame before it --
+        // which makes it longer still. That feedback is why a heavy scene does not degrade
+        // gradually but falls off a cliff: the load curve is fine until it crosses the point where
+        // one frame cannot finish the work the last one asked for, and then it runs away.
+        //
+        // Below 30fps the machine is already not keeping up, and the honest response is to let the
+        // simulation run behind real time -- slow motion -- rather than to demand the catch-up that
+        // caused it. Above 30fps nothing changes.
+        const int32_t maxSubSteps = (deltaTime > (1.0f / 30.0f)) ? 2 : 4;
 
         // And cap the catch-up after a hitch, so a stall does not turn into a burst of simulation
         // that is itself slow enough to cause the next one.
