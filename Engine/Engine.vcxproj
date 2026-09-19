@@ -683,6 +683,7 @@
     <ClCompile Include="Source\Engine\Assets\SoundWave.cpp" />
     <ClCompile Include="Source\Engine\Assets\VideoClip.cpp" />
     <ClCompile Include="Source\Engine\Assets\StaticMesh.cpp" />
+    <ClCompile Include="Source\Engine\Assets\CmprEncoder.cpp" />
     <ClCompile Include="Source\Engine\Assets\Texture.cpp" />
     <ClCompile Include="Source\Engine\AudioManager.cpp" />
     <ClCompile Include="Source\Engine\Clock.cpp" />
@@ -943,6 +944,7 @@
     <ClInclude Include="Source\Engine\Assets\SoundWave.h" />
     <ClInclude Include="Source\Engine\Assets\VideoClip.h" />
     <ClInclude Include="Source\Engine\Assets\StaticMesh.h" />
+    <ClInclude Include="Source\Engine\Assets\CmprEncoder.h" />
     <ClInclude Include="Source\Engine\Assets\Texture.h" />
     <ClInclude Include="Source\Engine\AudioManager.h" />
     <ClInclude Include="Source\Engine\CameraFrustum.h" />

@@ -1,4 +1,5 @@
 #include "Assets/Texture.h"
+#include "Assets/CmprEncoder.h"
 #include "Renderer.h"
 #include "Log.h"
 #include "AssetManager.h"
@@ -252,6 +253,11 @@ void CookTexture(
     stbi_write_png(pngPath.c_str(), texWidth, texHeight, comps, pixels.data(), texWidth * 4);
 
     // (2) Exec platform-specific texture converter with relevant args, and output to another temp file in Intermediate.
+    // Set when the GameCube/Wii branch decides this texture is CMPR that we
+    // can encode ourselves. Declared out here because the format itself is
+    // scoped to that branch.
+    bool encodeCmprHere = false;
+
     std::string cookCmd = "";
 
     switch (platform)
@@ -326,8 +332,13 @@ void CookTexture(
         // layer overwrites everything beneath it and only the last texture in
         // the material is ever seen.
         //
-        // So CMPR is now only for textures with no alpha at all.
-        if (format == PixelFormat::CMPR && !opaque)
+        // So CMPR with alpha is encoded here instead of by gxtexconv, which
+        // keeps a mask at 4 bits a texel. That path does not do mipmaps, so a
+        // mipmapped cutout still has to give up the compression.
+        const bool wantMips = (texture->IsMipmapped() && consoleEnableMips);
+        encodeCmprHere = (format == PixelFormat::CMPR) && !wantMips;
+
+        if (format == PixelFormat::CMPR && !opaque && !encodeCmprHere)
         {
             format = PixelFormat::RGBA5551;
         }
@@ -396,6 +407,31 @@ void CookTexture(
     }
 
     default: OCT_ASSERT(0); break;
+    }
+
+    // Encode CMPR ourselves where we can, rather than shelling out.
+    //
+    // gxtexconv cannot put alpha in a CMPR texture, so anything masked would
+    // otherwise have to be spent at 16 bits a texel. This also saves a process
+    // launch per texture, which is most of what cooking a project costs.
+    if (encodeCmprHere)
+    {
+        std::vector<uint8_t> tpl;
+
+        if (EncodeCmprTpl(pixels.data(), texWidth, texHeight, tpl))
+        {
+            outData = tpl;
+            outWidth = texWidth;
+            outHeight = texHeight;
+            outNumMips = 1;
+            return;
+        }
+
+        // Falling through to gxtexconv loses the alpha, so say why rather than
+        // letting a cutout quietly turn solid.
+        LogWarning("Texture '%s': %ux%u cannot be CMPR encoded here; "
+                   "falling back to gxtexconv, which will drop any alpha.",
+                   texture->GetName().c_str(), texWidth, texHeight);
     }
 
     SYS_Exec(cookCmd.c_str());
