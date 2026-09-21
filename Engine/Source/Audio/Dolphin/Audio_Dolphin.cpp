@@ -107,8 +107,11 @@ static size_t DiscRead(void* ptr, size_t size, size_t nmemb, void* ds)
         {
             uint32_t fill = d->size - d->pos;
             if (fill > kDiscWindowBytes) fill = kDiscWindowBytes;
-            if (!SYS_ReadFileRange(d->path.c_str(), true, d->base + d->pos, fill, (char*)d->window))
+            const bool readOk = SYS_ReadFileRange(d->path.c_str(), true, d->base + d->pos, fill, (char*)d->window);
+            if (!readOk)
             {
+                LogError("Audio stream: disc read failed (%s, offset %u, %u bytes)",
+                         d->path.c_str(), d->base + d->pos, fill);
                 d->windowSize = 0;
                 break;
             }
@@ -142,8 +145,19 @@ static long DiscTell(void* ds) { return (long)((DiscSource*)ds)->pos; }
 static uint32_t StreamFill(StreamVoice* sv, uint8_t* dst)
 {
     uint32_t written = 0;
+    int32_t errors = 0;
     while (written < sv->bufSize)
     {
+        // ov_read can go on returning an error (a read that keeps failing, a broken stream).
+        // This loop retried for ever on the MAIN thread, which is a frozen game. Give up on
+        // the stream instead: silence is a far better failure than a hang.
+        if (errors > 32)
+        {
+            LogError("Audio stream: decoder kept failing; stream ended.");
+            sv->eof = true;
+            break;
+        }
+
         uint32_t remain = sv->bufSize - written;
         long ret;
 
@@ -151,8 +165,8 @@ static uint32_t StreamFill(StreamVoice* sv, uint8_t* dst)
         {
             // ASND wants little-endian 16-bit -> decode straight into dst.
             ret = ov_read(&sv->vf, (char*)(dst + written), (int)remain, 0, 2, 1, NULL);
-            if (ret == 0) { if (sv->loop) { ov_pcm_seek(&sv->vf, 0); continue; } sv->eof = true; break; }
-            if (ret < 0) continue;
+            if (ret == 0) { if (sv->loop) { ov_pcm_seek(&sv->vf, 0); ++errors; continue; } sv->eof = true; break; }   // a loop that cannot restart counts as an error too
+            if (ret < 0) { ++errors; continue; }
             written += (uint32_t)ret;
         }
         else
@@ -162,8 +176,8 @@ static uint32_t StreamFill(StreamVoice* sv, uint8_t* dst)
             long cap = (long)sizeof(tmp);
             if (cap > (long)(remain * 2)) cap = (long)(remain * 2);
             ret = ov_read(&sv->vf, (char*)tmp, (int)cap, 1, 2, 1, NULL);
-            if (ret == 0) { if (sv->loop) { ov_pcm_seek(&sv->vf, 0); continue; } sv->eof = true; break; }
-            if (ret < 0) continue;
+            if (ret == 0) { if (sv->loop) { ov_pcm_seek(&sv->vf, 0); ++errors; continue; } sv->eof = true; break; }   // a loop that cannot restart counts as an error too
+            if (ret < 0) { ++errors; continue; }
             int n = (int)(ret / 2);
             for (int i = 0; i < n; ++i)
                 dst[written++] = (uint8_t)(((int)tmp[i] + 32768) >> 8);

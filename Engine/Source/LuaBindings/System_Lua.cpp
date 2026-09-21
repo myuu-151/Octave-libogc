@@ -102,6 +102,28 @@ int System_Lua::SetWindowTitle(lua_State* L)
     return 0;
 }
 
+// System.GetFreeMemory() -> bytes the heap can still hand out, or 0 where that is not known.
+// On the consoles this is the number to watch: what malloc holds free, plus what is left of the
+// arena it grows into. A game that leaks shows up here long before it freezes.
+#if PLATFORM_DOLPHIN
+#include <malloc.h>
+#include <ogc/system.h>
+#endif
+
+int System_Lua::GetFreeMemory(lua_State* L)
+{
+    lua_Integer freeBytes = 0;
+
+#if PLATFORM_DOLPHIN
+    struct mallinfo info = mallinfo();
+    freeBytes = lua_Integer(info.fordblks) +
+                lua_Integer((char*)SYS_GetArena1Hi() - (char*)SYS_GetArena1Lo());
+#endif
+
+    lua_pushinteger(L, freeBytes);
+    return 1;
+}
+
 void System_Lua::Bind()
 {
     lua_State* L = GetLua();
@@ -118,6 +140,8 @@ void System_Lua::Bind()
     REGISTER_TABLE_FUNC(L, tableIdx, DeleteSave);
 
     REGISTER_TABLE_FUNC(L, tableIdx, UnmountMemoryCard);
+
+    REGISTER_TABLE_FUNC(L, tableIdx, GetFreeMemory);
 
     REGISTER_TABLE_FUNC(L, tableIdx, SetScreenOrientation);
 
