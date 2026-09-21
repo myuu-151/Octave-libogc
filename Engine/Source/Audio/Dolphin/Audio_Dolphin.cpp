@@ -57,9 +57,16 @@ struct StreamVoice
     MemSource      mem;
     DiscSource     disc;
     uint8_t*       memOwned = nullptr;   // private copy of the compressed Vorbis
-    uint8_t*       buf[2] = { nullptr, nullptr };
+    // THREE buffers, in rotation: one playing, one queued behind it, one being FILLED. With two,
+    // a buffer could only be refilled once it had finished playing, so a whole buffer (0.2 s of
+    // audio) was decoded in one go, five times a second, on the main thread: measured in Dolphin
+    // with stereo Vorbis, that was a 24-27 ms frame every time and 54-58 fps; with no music the
+    // same game held 59.9 with no frame over 17 ms. Now a small slice is decoded EVERY frame.
+    uint8_t*       buf[3] = { nullptr, nullptr, nullptr };
     uint32_t       bufSize = 0;
-    int            nextBuf = 0;
+    int            nextBuf = 0;         // the one being filled
+    uint32_t       filled = 0;          // bytes of it decoded so far
+    uint32_t       sliceBytes = 0;      // how much to decode in one frame
     int            channels = 2;
     int            bytesPerSample = 1;   // 1 = 8-bit unsigned, 2 = 16-bit LE
     bool           loop = false;
@@ -141,12 +148,12 @@ static int DiscSeek(void* ds, ogg_int64_t off, int whence)
 }
 static long DiscTell(void* ds) { return (long)((DiscSource*)ds)->pos; }
 
-// Decode up to sv->bufSize bytes into dst. Returns bytes written (0 = ended).
-static uint32_t StreamFill(StreamVoice* sv, uint8_t* dst)
+// Decode up to `want` bytes into dst. Returns bytes written (0 = ended).
+static uint32_t StreamFill(StreamVoice* sv, uint8_t* dst, uint32_t want)
 {
     uint32_t written = 0;
     int32_t errors = 0;
-    while (written < sv->bufSize)
+    while (written < want)
     {
         // ov_read can go on returning an error (a read that keeps failing, a broken stream).
         // This loop retried for ever on the MAIN thread, which is a frozen game. Give up on
@@ -158,7 +165,7 @@ static uint32_t StreamFill(StreamVoice* sv, uint8_t* dst)
             break;
         }
 
-        uint32_t remain = sv->bufSize - written;
+        uint32_t remain = want - written;
         long ret;
 
         if (sv->bytesPerSample == 2)
@@ -190,8 +197,11 @@ static void StreamStop(StreamVoice* sv)
 {
     if (!sv->active) return;
     ov_clear(&sv->vf);
-    if (sv->buf[0]) { free(sv->buf[0]); sv->buf[0] = nullptr; }
-    if (sv->buf[1]) { free(sv->buf[1]); sv->buf[1] = nullptr; }
+    for (int b = 0; b < 3; ++b)
+    {
+        if (sv->buf[b]) { free(sv->buf[b]); sv->buf[b] = nullptr; }
+    }
+    sv->filled = 0;
     if (sv->memOwned) { free(sv->memOwned); sv->memOwned = nullptr; }
     if (sv->disc.window) { free(sv->disc.window); sv->disc.window = nullptr; }
     sv->disc.windowSize = 0;
@@ -373,14 +383,27 @@ void AUD_Update()
             continue;
         }
 
-        while (!sv->eof && ASND_TestVoiceBufferReady(v))
+        // A slice of decoding, into the buffer that is neither playing nor queued.
+        uint8_t* buf = sv->buf[sv->nextBuf];
+        if (!sv->eof && sv->filled < sv->bufSize)
         {
-            uint8_t* buf = sv->buf[sv->nextBuf];
-            uint32_t n = StreamFill(sv, buf);
-            if (n == 0) { sv->eof = true; break; }
+            uint32_t want = sv->bufSize - sv->filled;
+            if (want > sv->sliceBytes) want = sv->sliceBytes;
+            // If the voice is about to run dry (a long frame, a slow read), finish the buffer now:
+            // one long frame is better than a gap in the music.
+            if (ASND_TestVoiceBufferReady(v)) want = sv->bufSize - sv->filled;
+            uint32_t n = StreamFill(sv, buf + sv->filled, want);
+            sv->filled += n;
+            if (n < want) sv->eof = true;
+        }
+
+        // Hand it over once it is full (or is all there is) and the voice has room for it.
+        if (sv->filled > 0 && (sv->filled >= sv->bufSize || sv->eof) && ASND_TestVoiceBufferReady(v))
+        {
             DCFlushRange(buf, sv->bufSize);
-            ASND_AddVoice(v, buf, n);
-            sv->nextBuf ^= 1;
+            ASND_AddVoice(v, buf, sv->filled);
+            sv->nextBuf = (sv->nextBuf + 1) % 3;
+            sv->filled = 0;
         }
     }
 
@@ -432,7 +455,7 @@ void AUD_Play(
         StreamVoice* sv = &sStreams[voiceIndex];
         StreamStop(sv);   // clean any previous stream on this voice
         sv->active = true;  // so a failure below can StreamStop() what it allocated
-        sv->buf[0] = sv->buf[1] = nullptr;
+        sv->buf[0] = sv->buf[1] = sv->buf[2] = nullptr;
         sv->memOwned = nullptr;
 
         if (fromDisc)
@@ -504,14 +527,25 @@ void AUD_Play(
         sv->bufSize = ((bytesPerSec / 5) + 31) & ~31u;
         sv->buf[0] = (uint8_t*)memalign(32, sv->bufSize);
         sv->buf[1] = (uint8_t*)memalign(32, sv->bufSize);
-        if (sv->buf[0] == nullptr || sv->buf[1] == nullptr)
+        sv->buf[2] = (uint8_t*)memalign(32, sv->bufSize);
+
+        // A frame's slice: 1/40 s of audio. At 60 frames a second the decoder gains on the playback
+        // (1.5x); 1/25 s measured 18-19 ms worst frames, a shade over the 16.7 ms budget. A game
+        // running slower than 40 fps falls behind here, and the catch-up in AUD_Update (finish the
+        // buffer at once when the voice is about to run dry) covers it. Whole sample frames only.
+        const uint32_t frameBytes = uint32_t(sv->channels * sv->bytesPerSample);
+        sv->sliceBytes = bytesPerSec / 40;
+        sv->sliceBytes -= sv->sliceBytes % frameBytes;
+        sv->filled = 0;
+
+        if (sv->buf[0] == nullptr || sv->buf[1] == nullptr || sv->buf[2] == nullptr)
         {
             LogError("SoundWave '%s': failed to allocate stream buffers.", soundWave->GetName().c_str());
             StreamStop(sv);
             return;
         }
 
-        uint32_t n0 = StreamFill(sv, sv->buf[0]);
+        uint32_t n0 = StreamFill(sv, sv->buf[0], sv->bufSize);   // the first buffer whole: it has to start
         DCFlushRange(sv->buf[0], sv->bufSize);
         ASND_SetVoice(
             voiceIndex, voiceFormat, pitchHz, 0,
