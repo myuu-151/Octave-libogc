@@ -505,7 +505,17 @@ World::World() :
     SCOPED_STAT("World()")
 
     // Setup physics world
+#if PLATFORM_DOLPHIN || PLATFORM_3DS
+    // Bullet sets aside room for 4096 contact manifolds and 4096 collision algorithms up front:
+    // about 4 MB, of a console's 24. Both pools fall back to the heap when they fill, so a small
+    // pool costs nothing but an allocation in a scene that really does have that many contacts.
+    btDefaultCollisionConstructionInfo collisionInfo;
+    collisionInfo.m_defaultMaxPersistentManifoldPoolSize = 256;
+    collisionInfo.m_defaultMaxCollisionAlgorithmPoolSize = 256;
+    mCollisionConfig = new btDefaultCollisionConfiguration(collisionInfo);
+#else
     mCollisionConfig = new btDefaultCollisionConfiguration();
+#endif
     mCollisionDispatcher = new btCollisionDispatcher(mCollisionConfig);
     mBroadphase = new btDbvtBroadphase();
     mSolver = new btSequentialImpulseConstraintSolver();

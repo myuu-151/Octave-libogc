@@ -1770,13 +1770,25 @@ ThreadFuncRet AssetManager::AsyncLoadThreadFunc(void* in)
             // (2) Load the file into a stream
             // (3) Call asset->LoadStream()
             // The call to Asset::Create() is made on the main thread, that's why we queue it up on the EndLoadQueue
-            if (request->mEmbeddedData != nullptr)
+            // An allocation that fails part way through a load THROWS (operator new). Nothing above
+            // this thread's entry point can catch it, and on the consoles the unwinder then walks off
+            // the end of the thread's stack and never comes back: a silent freeze. Out of memory is
+            // an ordinary way for a load to fail, so it is caught here and treated as one.
+            try
             {
-                newAsset->LoadEmbedded(request->mEmbeddedData, request);
+                if (request->mEmbeddedData != nullptr)
+                {
+                    newAsset->LoadEmbedded(request->mEmbeddedData, request);
+                }
+                else
+                {
+                    newAsset->LoadFile(request->mPath.c_str(), request);
+                }
             }
-            else
+            catch (...)
             {
-                newAsset->LoadFile(request->mPath.c_str(), request);
+                LogError("Async load of '%s' ran out of memory; left unloaded.", request->mPath.c_str());
+                request->mFailed = true;
             }
 
             // A load that failed (see Asset::LoadFile) has nothing to hand over. The request still
