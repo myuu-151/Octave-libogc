@@ -38,10 +38,17 @@ static int sSdChannel = -1;
 #endif
 
 static bool sFatInit = false;
+// Every file read calls InitFAT(). With no card in (Dolphin, or a console booted from a disc)
+// the mount fails -- and it used to be tried again on EVERY read. A game that streams assets
+// does hundreds of reads: about 460 failed mounts in, the console froze. A few tries cover a
+// card that is slow to come up; after that there is no card, and asking again will not make one.
+static int32_t sFatAttempts = 0;
+static const int32_t kMaxFatAttempts = 4;
 static void InitFAT()
 {
-    if (!sFatInit)
+    if (!sFatInit && sFatAttempts < kMaxFatAttempts)
     {
+        sFatAttempts++;
 #if PLATFORM_GAMECUBE
         sSdChannel = OctSd_MountAll();
         if (sSdChannel >= 0)
@@ -910,7 +917,8 @@ ThreadObject* SYS_CreateThread(ThreadFuncFP func, void* arg)
         func,           /* code */
         arg,            /* arg pointer for thread */
         nullptr,        /* stack base */
-        16 * 1024,      /* stack size */
+        64 * 1024,      /* stack size: 16 KB overflowed on hardware once a thread read the SD card
+                           (fread -> libfat -> SD driver); the async asset loader does exactly that */
         64              /* thread priority */);
 
     if (createStatus != 0)
@@ -1332,6 +1340,12 @@ std::string SYS_GetClipboardText()
 }
 
 // Misc
+// 1 = route engine logging to OSReport so it shows in Dolphin's log. KEEP AT 0 for anything
+// that runs on hardware: OSReport overwrites the RTC counter (see SYS_Log below).
+#ifndef OCT_DOLPHIN_EMU_LOG
+#define OCT_DOLPHIN_EMU_LOG 0
+#endif
+
 void SYS_Log(LogSeverity severity, const char* format, va_list arg)
 {
     // NOTE: do NOT route logging through SYS_Report() on console. Per Extrems, libogc's
@@ -1342,7 +1356,15 @@ void SYS_Log(LogSeverity severity, const char* format, va_list arg)
     // overwriting the RTC counter is real low-mem state corruption, so logging is a no-op
     // on console; for ISO/asset tracing use the local git-ignored file logger
     // (IsoLog_local.h -> /octiso.log), which touches neither the RTC counter nor the OS globals.
+#if OCT_DOLPHIN_EMU_LOG
+    // DOLPHIN ONLY, for a diagnostic build: never ship this to a console (see above).
+    (void)severity;
+    char line[512];
+    vsnprintf(line, sizeof(line), format, arg);
+    SYS_Report("%s\n", line);
+#else
     (void)severity; (void)format; (void)arg;
+#endif
 }
 
 void SYS_Assert(const char* exprString, const char* fileString, uint32_t lineNumber)
