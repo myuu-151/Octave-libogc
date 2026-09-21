@@ -175,6 +175,12 @@ static uint32_t IsoRead32(const uint8_t* p)
 // Diagnostic log of ISO asset streaming. The actual logger lives in a local,
 // git-ignored header (IsoLog_local.h) so it never ships. If that file is present
 // (a developer's machine), IsoLog writes /octiso.log; otherwise it's a no-op.
+// A line for EVERY file read (H hit, L loose file, F failed). Off by default: a game that streams
+// assets reads several files a second, and each line is a write to the same SD card.
+#ifndef OCT_ISOLOG_FILES
+#define OCT_ISOLOG_FILES 0
+#endif
+
 #if __has_include("IsoLog_local.h")
 #include "IsoLog_local.h"
 #else
@@ -343,6 +349,11 @@ static bool IsoParseFst()
     }
 
     IsoLog("ISO MOUNTED (%s)  files=%u", sIsoMode == ISO_DVD ? "DVD" : "SD", (uint32_t)sIsoFiles.size());
+#if PLATFORM_GAMECUBE
+    // Which SD transfer mode the driver settled on: pio27, dma27, pio13.5, dma13.5, or "stock"
+    // when libogc's own mount was used. LogDebug can't show it (SYS_Log is a no-op on console).
+    IsoLog("SD: EXI channel %d, mode %s", sSdChannel, OctSd_GetModeName(sSdChannel));
+#endif
     int32_t sample = 0;
     for (auto& kv : sIsoFiles) { IsoLog("  fst: %s (%u bytes)", kv.first.c_str(), kv.second.size); if (++sample >= 8) break; }
 #if OCT_FORCE_DVD
@@ -582,11 +593,13 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
                 fileSize = glm::min(fileSize, maxSize);
             }
 
+#if OCT_ISOLOG_FILES
             {
                 // The log writes to the SD: hold the file I/O lock, as other threads may be reading the card.
                 SCOPED_LOCK(GetIsoMutex());
                 IsoLog("H %s", path);
             }
+#endif
 
             if (sIsoMode == ISO_DVD && (ent.offset & 31u) == 0)
             {
@@ -625,7 +638,9 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
 
     if (file != nullptr)
     {
+#if OCT_ISOLOG_FILES
         if (isAsset) IsoLog("L %s", path);
+#endif
 
         int32_t fileSize = 0;
         fseek(file, 0, SEEK_END);
@@ -646,7 +661,7 @@ void SYS_AcquireFileData(const char* path, bool isAsset, int32_t maxSize, char*&
     }
     else
     {
-        if (isAsset) IsoLog("F %s", path);
+        if (isAsset) IsoLog("F %s", path);      // a FAILED read is rare and always worth a line
         LogError("Failed to open file: %s", path);
     }
 }

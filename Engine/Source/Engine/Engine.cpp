@@ -692,12 +692,19 @@ bool Update()
     EditorImguiDraw();
 #endif
 
-    for (int32_t i = 0; i < int32_t(sWorlds.size()); ++i)
     {
-        Renderer::Get()->Render(sWorlds[i], i);
+        // Includes Culling, Overlay and Vsync, which are counted on their own as well.
+        SCOPED_FRAME_STAT("Render");
+        for (int32_t i = 0; i < int32_t(sWorlds.size()); ++i)
+        {
+            Renderer::Get()->Render(sWorlds[i], i);
+        }
     }
 
-    AssetManager::Get()->Update(realDeltaTime);
+    {
+        SCOPED_FRAME_STAT("Assets");
+        AssetManager::Get()->Update(realDeltaTime);
+    }
 
     END_FRAME_STAT("Frame");
 

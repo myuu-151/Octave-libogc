@@ -10,6 +10,78 @@
 
 static Profiler* sProfiler = nullptr;
 
+#if PLATFORM_DOLPHIN && PROFILING_ENABLED
+// The console has no profiler window, so where the frame went is written to the SD diagnostic log
+// (OctLog -> /octiso.log, a no-op unless that local logger is switched on): one line every few
+// seconds, the average of every frame stat over them and then the same stats for the single worst
+// frame. One line, not one a frame, because writing to the card is itself a hitch.
+#include <stdio.h>
+#include <malloc.h>
+void OctLog(const char* format, ...);
+
+static const float kPerfLogPeriod = 5.0f;
+static const uint32_t kPerfMaxStats = 24;
+
+static void LogFrameStats(const std::vector<CpuStat>& stats, float deltaTime)
+{
+    static float sSum[kPerfMaxStats] = {};
+    static float sWorst[kPerfMaxStats] = {};
+    static float sWorstFrame = 0.0f;
+    static float sTime = 0.0f;
+    static uint32_t sFrames = 0;
+
+    uint32_t count = glm::min<uint32_t>(uint32_t(stats.size()), kPerfMaxStats);
+    float frameMs = deltaTime * 1000.0f;
+
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        sSum[i] += stats[i].mTime;
+    }
+
+    if (frameMs > sWorstFrame)
+    {
+        sWorstFrame = frameMs;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            sWorst[i] = stats[i].mTime;
+        }
+    }
+
+    sTime += deltaTime;
+    sFrames++;
+
+    if (sTime >= kPerfLogPeriod)
+    {
+        char line[500];
+        struct mallinfo info = mallinfo();
+        int at = snprintf(line, sizeof(line), "PERF %.1ffps heap=%dK avg", sFrames / sTime, int(info.fordblks / 1024));
+
+        for (uint32_t i = 0; i < count && at < int(sizeof(line)) - 24; ++i)
+        {
+            at += snprintf(line + at, sizeof(line) - at, " %s=%.1f", stats[i].mName, sSum[i] / sFrames);
+        }
+
+        at += snprintf(line + at, sizeof(line) - at, " | worst %.0fms", sWorstFrame);
+
+        for (uint32_t i = 0; i < count && at < int(sizeof(line)) - 24; ++i)
+        {
+            at += snprintf(line + at, sizeof(line) - at, " %s=%.1f", stats[i].mName, sWorst[i]);
+        }
+
+        OctLog("%s", line);
+
+        for (uint32_t i = 0; i < kPerfMaxStats; ++i)
+        {
+            sSum[i] = 0.0f;
+            sWorst[i] = 0.0f;
+        }
+        sWorstFrame = 0.0f;
+        sTime = 0.0f;
+        sFrames = 0;
+    }
+}
+#endif
+
 void Profiler::BeginFrame()
 {
 #if PROFILING_ENABLED
@@ -33,6 +105,10 @@ void Profiler::EndFrame()
     {
         mCpuFrameStats[i].mSmoothedTime = Maths::Damp(mCpuFrameStats[i].mSmoothedTime, mCpuFrameStats[i].mTime, 0.05f, deltaTime);
     }
+
+#if PLATFORM_DOLPHIN
+    LogFrameStats(mCpuFrameStats, deltaTime);
+#endif
 
     for (uint32_t i = 0; i < mGpuStats.size(); ++i)
     {
