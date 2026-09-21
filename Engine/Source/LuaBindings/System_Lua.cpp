@@ -124,6 +124,24 @@ int System_Lua::GetFreeMemory(lua_State* L)
     return 1;
 }
 
+// System.GetStorageMode() -> how the GameCube's SD card is being read: "dma27", "dma13.5", "pio27",
+// "pio13.5", or "stock" when the engine's own SD driver mounted nothing (no card, or a disc).
+// An empty string everywhere else. It is the only way to see, on the console itself, whether an
+// adapter turned out to be semi-passive (DMA) or passive (PIO).
+#if PLATFORM_GAMECUBE
+extern "C" const char* OctSd_GetModeName(int chan);
+#endif
+
+int System_Lua::GetStorageMode(lua_State* L)
+{
+#if PLATFORM_GAMECUBE
+    lua_pushstring(L, OctSd_GetModeName(-1));
+#else
+    lua_pushstring(L, "");
+#endif
+    return 1;
+}
+
 void System_Lua::Bind()
 {
     lua_State* L = GetLua();
@@ -142,6 +160,7 @@ void System_Lua::Bind()
     REGISTER_TABLE_FUNC(L, tableIdx, UnmountMemoryCard);
 
     REGISTER_TABLE_FUNC(L, tableIdx, GetFreeMemory);
+    REGISTER_TABLE_FUNC(L, tableIdx, GetStorageMode);
 
     REGISTER_TABLE_FUNC(L, tableIdx, SetScreenOrientation);
 
