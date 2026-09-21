@@ -35,11 +35,27 @@ struct MemSource
     uint32_t pos;
 };
 
+// The same, over a range of a FILE: the compressed audio stays on the disc. vorbisfile asks for
+// a few KB at a time, so reads go through one small window and most are served from it.
+struct DiscSource
+{
+    std::string path;
+    uint32_t    base = 0;       // where the audio starts in the file
+    uint32_t    size = 0;
+    uint32_t    pos = 0;
+    uint8_t*    window = nullptr;
+    uint32_t    windowAt = 0;
+    uint32_t    windowSize = 0;
+};
+
+static const uint32_t kDiscWindowBytes = 16 * 1024;
+
 struct StreamVoice
 {
     bool           active = false;
     OggVorbis_File vf;
     MemSource      mem;
+    DiscSource     disc;
     uint8_t*       memOwned = nullptr;   // private copy of the compressed Vorbis
     uint8_t*       buf[2] = { nullptr, nullptr };
     uint32_t       bufSize = 0;
@@ -76,6 +92,51 @@ static int MemSeek(void* ds, ogg_int64_t off, int whence)
 }
 static long MemTell(void* ds) { return (long)((MemSource*)ds)->pos; }
 static int  MemClose(void* ds) { (void)ds; return 0; }
+
+static size_t DiscRead(void* ptr, size_t size, size_t nmemb, void* ds)
+{
+    DiscSource* d = (DiscSource*)ds;
+    size_t want = size * nmemb;
+    size_t avail = d->size - d->pos;
+    if (want > avail) want = avail;
+
+    size_t done = 0;
+    while (done < want)
+    {
+        if (d->pos < d->windowAt || d->pos >= d->windowAt + d->windowSize)
+        {
+            uint32_t fill = d->size - d->pos;
+            if (fill > kDiscWindowBytes) fill = kDiscWindowBytes;
+            if (!SYS_ReadFileRange(d->path.c_str(), true, d->base + d->pos, fill, (char*)d->window))
+            {
+                d->windowSize = 0;
+                break;
+            }
+            d->windowAt = d->pos;
+            d->windowSize = fill;
+        }
+
+        uint32_t from = d->pos - d->windowAt;
+        size_t take = d->windowSize - from;
+        if (take > want - done) take = want - done;
+        memcpy((uint8_t*)ptr + done, d->window + from, take);
+        done += take;
+        d->pos += (uint32_t)take;
+    }
+    return (size > 0) ? (done / size) : 0;
+}
+static int DiscSeek(void* ds, ogg_int64_t off, int whence)
+{
+    DiscSource* d = (DiscSource*)ds;
+    int64_t np = (whence == SEEK_CUR) ? (int64_t)d->pos + off
+               : (whence == SEEK_END) ? (int64_t)d->size + off
+               : off;
+    if (np < 0) np = 0;
+    if (np > (int64_t)d->size) np = d->size;
+    d->pos = (uint32_t)np;
+    return 0;
+}
+static long DiscTell(void* ds) { return (long)((DiscSource*)ds)->pos; }
 
 // Decode up to sv->bufSize bytes into dst. Returns bytes written (0 = ended).
 static uint32_t StreamFill(StreamVoice* sv, uint8_t* dst)
@@ -118,6 +179,8 @@ static void StreamStop(StreamVoice* sv)
     if (sv->buf[0]) { free(sv->buf[0]); sv->buf[0] = nullptr; }
     if (sv->buf[1]) { free(sv->buf[1]); sv->buf[1] = nullptr; }
     if (sv->memOwned) { free(sv->memOwned); sv->memOwned = nullptr; }
+    if (sv->disc.window) { free(sv->disc.window); sv->disc.window = nullptr; }
+    sv->disc.windowSize = 0;
     sv->active = false;
     sv->eof = false;
 }
@@ -348,10 +411,40 @@ void AUD_Play(
 
     // Streamed sound: decode-on-demand from the in-RAM compressed Vorbis rather
     // than playing a fully-decoded PCM buffer.
-    if (soundWave->GetStream() && soundWave->GetCompressedData() != nullptr)
+    const bool fromDisc = soundWave->GetStream() && soundWave->GetDiscSize() > 0;
+
+    if (fromDisc || (soundWave->GetStream() && soundWave->GetCompressedData() != nullptr))
     {
         StreamVoice* sv = &sStreams[voiceIndex];
         StreamStop(sv);   // clean any previous stream on this voice
+        sv->active = true;  // so a failure below can StreamStop() what it allocated
+        sv->buf[0] = sv->buf[1] = nullptr;
+        sv->memOwned = nullptr;
+
+        if (fromDisc)
+        {
+            // The audio never came off the disc: open it where it lies. Costs one small
+            // window of memory however long the track is.
+            sv->disc.path = soundWave->GetDiscPath();
+            sv->disc.base = soundWave->GetDiscOffset();
+            sv->disc.size = soundWave->GetDiscSize();
+            sv->disc.pos = 0;
+            sv->disc.windowAt = 0;
+            sv->disc.windowSize = 0;
+            sv->disc.window = (uint8_t*)malloc(kDiscWindowBytes);
+
+            ov_callbacks dcb = { DiscRead, DiscSeek, MemClose, DiscTell };
+            if (sv->disc.window == nullptr ||
+                ov_open_callbacks(&sv->disc, &sv->vf, NULL, 0, dcb) < 0)
+            {
+                LogError("SoundWave '%s': failed to open Vorbis stream on disc.", soundWave->GetName().c_str());
+                if (sv->disc.window) { free(sv->disc.window); sv->disc.window = nullptr; }
+                sv->active = false;
+                return;
+            }
+        }
+        else
+        {
 
         // Own a private copy of the compressed Vorbis so the stream is independent
         // of the SoundWave asset's lifetime. In non-embedded builds the asset can be
@@ -365,6 +458,7 @@ void AUD_Play(
         {
             LogError("SoundWave '%s': failed to allocate %u-byte stream copy.",
                      soundWave->GetName().c_str(), compressedSize);
+            sv->active = false;
             return;
         }
         memcpy(sv->memOwned, soundWave->GetCompressedData(), compressedSize);
@@ -379,7 +473,9 @@ void AUD_Play(
             LogError("SoundWave '%s': failed to open Vorbis stream.", soundWave->GetName().c_str());
             free(sv->memOwned);
             sv->memOwned = nullptr;
+            sv->active = false;
             return;
+        }
         }
 
         sv->active = true;

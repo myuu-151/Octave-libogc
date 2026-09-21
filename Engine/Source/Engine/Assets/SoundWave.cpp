@@ -49,6 +49,60 @@ SoundWave::~SoundWave()
 
 }
 
+int32_t SoundWave::GetFileReadLimit(const char* path)
+{
+#if PLATFORM_DOLPHIN && !EDITOR
+    // A Stream sound leaves its compressed audio ON THE DISC and reads it as it plays (see
+    // Audio_Dolphin). So only the front of the file is loaded: everything up to the audio.
+    // Peek at it to find out whether this is one, and where its audio starts.
+    mDiscSize = 0;
+
+    Stream head;
+    if (!head.ReadFile(path, true, 1024))
+    {
+        return 0;
+    }
+
+    AssetHeader header = ReadHeader(head);
+    head.SetAssetVersion(header.mVersion);
+
+    std::string name;
+    head.ReadString(name);
+
+    // volume, pitch, class, compress, compress internal, stream, six format words, compressed, size
+    const uint32_t need = 4 + 4 + 1 + 3 + 6 * 4 + 1 + 4;
+    if (header.mVersion < ASSET_VERSION_SOUND_STREAM || head.GetPos() + need > head.GetSize())
+    {
+        return 0;
+    }
+
+    head.ReadFloat();
+    head.ReadFloat();
+    head.ReadInt8();
+    head.ReadBool();
+    head.ReadBool();
+    bool streamed = head.ReadBool();
+    for (uint32_t i = 0; i < 6; ++i)
+    {
+        head.ReadUint32();
+    }
+    bool compressed = head.ReadBool();
+
+    if (!streamed || !compressed)
+    {
+        return 0;
+    }
+
+    mDiscSize = head.ReadUint32();
+    mDiscOffset = head.GetPos();
+    mDiscPath = path;
+    return int32_t(mDiscOffset);
+#else
+    (void)path;
+    return 0;
+#endif
+}
+
 void SoundWave::LoadStream(Stream& stream, Platform platform)
 {
     Asset::LoadStream(stream, platform);
@@ -86,9 +140,18 @@ void SoundWave::LoadStream(Stream& stream, Platform platform)
         mCompressedSize = compressedSize;
         memcpy(mCompressedData, stream.GetData() + stream.GetPos(), compressedSize);
 #elif PLATFORM_DOLPHIN
+        if (mStream && mDiscSize > 0)
+        {
+            // Streamed from the disc: GetFileReadLimit() stopped the load short of the audio,
+            // so there is nothing more here to read, and nothing is kept.
+            AUD_ProcessWaveBuffer(this);
+            return;
+        }
+
         if (mStream)
         {
-            // Streamed sound: keep the compressed Vorbis in RAM and decode it on
+            // No file to go back to (an embedded build): the old way. Keep the compressed
+            // Vorbis in RAM and decode it on
             // the fly at playback (see Audio_Dolphin). Skips the full PCM decode,
             // so a long track costs its compressed size (~KB) instead of MBs of
             // decoded PCM.

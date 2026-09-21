@@ -12,6 +12,7 @@ public:
     ~SoundWave();
 
     virtual void LoadStream(Stream& stream, Platform platform) override;
+    virtual int32_t GetFileReadLimit(const char* path) override;
     virtual void SaveStream(Stream& stream, Platform platform) override;
     virtual void Create() override;
     virtual void Destroy() override;
@@ -47,6 +48,12 @@ public:
     const uint8_t* GetCompressedData() const;
     uint32_t GetCompressedSize() const;
 
+    // A Stream sound on console, loaded from a file: the compressed audio is NOT in memory.
+    // It is this many bytes of the asset's own file, from this offset, read while it plays.
+    const std::string& GetDiscPath() const { return mDiscPath; }
+    uint32_t GetDiscOffset() const { return mDiscOffset; }
+    uint32_t GetDiscSize() const { return mDiscSize; }
+
 protected:
 
     static bool HandlePropChange(Datum* datum, uint32_t index, const void* newValue);
@@ -56,6 +63,10 @@ protected:
 
     uint8_t* mCompressedData = nullptr;
     uint32_t mCompressedSize = 0;
+
+    std::string mDiscPath;
+    uint32_t mDiscOffset = 0;
+    uint32_t mDiscSize = 0;
 
     // Properties
     float mVolumeMultiplier = 1.0f;
