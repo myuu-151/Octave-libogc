@@ -745,8 +745,14 @@ void ActionManager::BuildData(Platform platform, bool embedded)
 
     // If packaging for Windows or Linux in standalone editor, we can use the existing octave executables.
     // But in headless mode, always compile since we're doing a full build.
-    if (standalone && !IsHeadless() &&
-        (platform == Platform::Windows || platform == Platform::Linux))
+    //
+    // Not on Windows in this fork. Upstream ships the game runtime as Octave.exe beside the
+    // editor, so "is there an Octave.exe here" means "there is a runtime to reuse". Here the
+    // Octave.exe beside the editor IS the editor (the ReleaseEditor build, copied to the root to
+    // be run from), so reusing it would package the editor as the game. Windows always builds
+    // the Release|x64 runtime instead: through the solution it is incremental, a few seconds
+    // when nothing has changed, and the runtime can then never be a stale one either.
+    if (standalone && !IsHeadless() && platform == Platform::Linux)
     {
         needCompile = !SYS_DoesFileExist(prebuiltExeName.c_str(), false);
     }
@@ -771,6 +777,11 @@ void ActionManager::BuildData(Platform platform, bool embedded)
             if (engineState->mSolutionPath != "")
             {
                 solutionPath = engineState->mSolutionPath;
+            }
+
+            if (GetDevenvPath() == "")
+            {
+                LogError("Visual Studio was not found (External/vswhere/vswhere.exe), so the Windows runtime cannot be built.");
             }
 
             std::string devenvCmd = "\"" + GetDevenvPath();

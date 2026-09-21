@@ -185,19 +185,22 @@ std::string GetDevkitproPath()
 
 std::string GetDevenvPath()
 {
+    // Ask vswhere for the one line wanted. This used to pipe its whole report through grep,
+    // which only exists on a Windows PATH that happens to have Git's tools on it; without it
+    // the path came back empty and Windows packaging failed with no sign of why.
     std::string devenvPath;
-    SYS_Exec("External\\vswhere\\vswhere.exe | grep productPath", &devenvPath);
+    SYS_Exec("External\\vswhere\\vswhere.exe -latest -property productPath", &devenvPath);
 
-    size_t keySize = strlen("productPath: ");
-    if (devenvPath.size() > keySize)
+    // Trim the line ending (and anything else that is not part of the path).
+    while (!devenvPath.empty() && (devenvPath.back() == '\n' || devenvPath.back() == '\r' || devenvPath.back() == ' '))
     {
-        devenvPath = devenvPath.substr(keySize);
+        devenvPath.pop_back();
+    }
+
+    if (!devenvPath.empty())
+    {
         devenvPath.insert(devenvPath.begin(), '\"');
         devenvPath.push_back('\"');
-    }
-    else
-    {
-        devenvPath = "";
     }
 
     return devenvPath;

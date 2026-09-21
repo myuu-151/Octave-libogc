@@ -2306,7 +2306,13 @@ static void DrawPackageMenu()
     //if (ImGui::BeginPopup("PackagePopup"))
     //{
     // This fork targets libogc's GameCube: assets are packaged into the disc image and read from
-    // the SD card or the disc, so that's the only packaging option it offers.
+    // the SD card or the disc. Windows is offered beside it for projects that are also, or only,
+    // a desktop game; the rest of upstream's list (Linux, Android, Wii, 3DS, the embedded builds)
+    // stays out. BuildData()'s Windows path was never removed, only this entry.
+#if PLATFORM_WINDOWS
+    if (ImGui::MenuItem("Windows"))
+        am->BuildData(Platform::Windows, false);
+#endif
     if (ImGui::MenuItem("GameCube (SD/DVD)"))
         am->BuildData(Platform::GameCube, false);
 
