@@ -142,6 +142,25 @@ int System_Lua::GetStorageMode(lua_State* L)
     return 1;
 }
 
+// System.GetPerfReport() -> two strings: the average milliseconds of each frame stat over the last
+// five seconds, and the same stats for the worst single frame of them. Empty off the consoles.
+#if PLATFORM_DOLPHIN
+const char* GetPerfAverageLine();
+const char* GetPerfWorstLine();
+#endif
+
+int System_Lua::GetPerfReport(lua_State* L)
+{
+#if PLATFORM_DOLPHIN
+    lua_pushstring(L, GetPerfAverageLine());
+    lua_pushstring(L, GetPerfWorstLine());
+#else
+    lua_pushstring(L, "");
+    lua_pushstring(L, "");
+#endif
+    return 2;
+}
+
 void System_Lua::Bind()
 {
     lua_State* L = GetLua();
@@ -161,6 +180,7 @@ void System_Lua::Bind()
 
     REGISTER_TABLE_FUNC(L, tableIdx, GetFreeMemory);
     REGISTER_TABLE_FUNC(L, tableIdx, GetStorageMode);
+    REGISTER_TABLE_FUNC(L, tableIdx, GetPerfReport);
 
     REGISTER_TABLE_FUNC(L, tableIdx, SetScreenOrientation);
 

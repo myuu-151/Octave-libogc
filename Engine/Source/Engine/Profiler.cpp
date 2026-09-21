@@ -20,6 +20,12 @@ static Profiler* sProfiler = nullptr;
 void OctLog(const char* format, ...);
 
 static const float kPerfLogPeriod = 5.0f;
+// The last period's two halves, kept for System.GetPerfReport(): a game can put them on screen
+// where the card cannot be written (or read back) conveniently.
+static char sPerfAverage[256] = "";
+static char sPerfWorst[256] = "";
+const char* GetPerfAverageLine() { return sPerfAverage; }
+const char* GetPerfWorstLine() { return sPerfWorst; }
 static const uint32_t kPerfMaxStats = 24;
 
 static void LogFrameStats(const std::vector<CpuStat>& stats, float deltaTime)
@@ -69,6 +75,16 @@ static void LogFrameStats(const std::vector<CpuStat>& stats, float deltaTime)
         }
 
         OctLog("%s", line);
+
+        int a = snprintf(sPerfAverage, sizeof(sPerfAverage), "avg");
+        int w = snprintf(sPerfWorst, sizeof(sPerfWorst), "worst %.0f:", sWorstFrame);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            // Three letters of the name, and only what took a millisecond somewhere: it has to fit a screen.
+            if (sSum[i] / sFrames < 1.0f && sWorst[i] < 1.0f) continue;
+            if (a < int(sizeof(sPerfAverage)) - 16) a += snprintf(sPerfAverage + a, sizeof(sPerfAverage) - a, " %.3s %.0f", stats[i].mName, sSum[i] / sFrames);
+            if (w < int(sizeof(sPerfWorst)) - 16) w += snprintf(sPerfWorst + w, sizeof(sPerfWorst) - w, " %.3s %.0f", stats[i].mName, sWorst[i]);
+        }
 
         for (uint32_t i = 0; i < kPerfMaxStats; ++i)
         {
