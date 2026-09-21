@@ -26,6 +26,7 @@ struct AsyncLoadRequest
     TypeId mType = INVALID_TYPE_ID;
     Asset* mAsset = nullptr;
     int32_t mRequeueCount = 0;
+    bool mFailed = false;           // the file could not be read: there is no asset to hand over
 };
 
 // Name-based lookup (backward compatible)

@@ -1779,6 +1779,14 @@ ThreadFuncRet AssetManager::AsyncLoadThreadFunc(void* in)
                 newAsset->LoadFile(request->mPath.c_str(), request);
             }
 
+            // A load that failed (see Asset::LoadFile) has nothing to hand over. The request still
+            // goes to the end queue, with no asset, so that the refs waiting on it are released.
+            if (request->mFailed)
+            {
+                delete newAsset;
+                newAsset = nullptr;
+            }
+
             request->mAsset = newAsset;
 
             // (4) Add the request to the EndLoadQueue
@@ -1841,7 +1849,20 @@ void AssetManager::UpdateEndLoadQueue()
                 // Lock the AssetRefLock while we update asset members
                 SCOPED_LOCK(GetAssetRefMutex());
 
-                if (stub == nullptr)
+                if (loadRequest->mAsset == nullptr)
+                {
+                    // The load failed. Let go of every ref that was waiting on it: each stays
+                    // empty, and asking for the asset again later starts a fresh request.
+                    LogWarning("Async load of %s failed; nothing loaded.", loadRequest->mName.c_str());
+                    for (int32_t i = int32_t(loadRequest->mTargetRefs.size()) - 1; i >= 0; --i)
+                    {
+                        if (loadRequest->mTargetRefs[i] != nullptr)
+                        {
+                            loadRequest->mTargetRefs[i]->SetLoadRequest(nullptr);
+                        }
+                    }
+                }
+                else if (stub == nullptr)
                 {
                     LogError("Cannot find asset for async load request");
                 }

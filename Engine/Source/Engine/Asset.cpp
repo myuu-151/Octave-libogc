@@ -179,7 +179,21 @@ void Asset::LoadFile(const char* path, AsyncLoadRequest* request)
 
     Stream stream;
     stream.SetAsyncRequest(request);
-    stream.ReadFile(path, true, GetFileReadLimit(path));
+    // A READ CAN FAIL: a disc error, or no memory for the buffer (a 24 MB console that streams
+    // assets in and out lives close to that edge). The stream is then EMPTY, and parsing a header
+    // out of it was a read through a null pointer -- a DSI on the loader thread, which takes the
+    // whole game down for one missing texture. Say which file, and leave the asset unloaded: the
+    // caller can see that (IsLoaded) and carry on without it.
+    if (!stream.ReadFile(path, true, GetFileReadLimit(path)) || stream.GetSize() == 0)
+    {
+        LogError("Asset '%s': could not read %s; left unloaded.", mName.c_str(), path);
+        if (request != nullptr)
+        {
+            request->mFailed = true;
+        }
+        return;
+    }
+
     LoadStream(stream, GetPlatform());
 
     // Only "finish" the load if not async.
