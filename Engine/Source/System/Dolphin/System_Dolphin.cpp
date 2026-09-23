@@ -1118,21 +1118,147 @@ static void UnmountMemoryCard(int32_t channel, int32_t result)
     SYS_UnmountMemoryCard();
 }
 
+// The last CARD_Mount's result: why slot A is not mounted, when it is not.
+static int32_t sCardMountResult = CARD_ERROR_NOCARD;
+
 static void MountMemoryCard()
 {
     if (!IsMemoryCardMounted())
     {
-        LogDebug("Initializing CARD");
-        GetEngineState()->mSystem.mMemoryCardMountArea = SYS_AlignedMalloc(CARD_WORKAREA_SIZE, 32);
-        CARD_Init("OCTA","00");
+        // The work area is made once and kept. Mounting is tried again every time a save is
+        // touched while no card is in, and a fresh 40 KB each try was never given back.
+        if (GetEngineState()->mSystem.mMemoryCardMountArea == nullptr)
+        {
+            LogDebug("Initializing CARD");
+            GetEngineState()->mSystem.mMemoryCardMountArea = SYS_AlignedMalloc(CARD_WORKAREA_SIZE, 32);
+            CARD_Init("OCTA","00");
+        }
         int errorSlotA = CARD_Mount(CARD_SLOTA, GetEngineState()->mSystem.mMemoryCardMountArea, UnmountMemoryCard);
+        sCardMountResult = errorSlotA;
         LogDebug("Memory card code: %d", errorSlotA);
 
         if (errorSlotA >= 0)
         {
             GetEngineState()->mSystem.mMemoryCardMounted = true;
         }
+        else
+        {
+            // A damaged or foreign card can be left half attached; let go of it, so the next
+            // try (another card put in) starts clean.
+            CARD_Unmount(CARD_SLOTA);
+        }
     }
+}
+
+// What the memory card's own menu shows for a save: a 32-character title and a 32-character
+// description, and a 32 x 32 RGB5A3 icon (GX's 4 x 4 tiles, big-endian). Set by the game with
+// System.SetSaveInfo; with no icon set, saves are written as they always were, bare.
+#define SAVE_COMMENT_SIZE 64
+#define SAVE_ICON_SIZE (CARD_ICON_W * CARD_ICON_H * 2)
+static char sSaveComment[SAVE_COMMENT_SIZE] = {};
+static uint8_t sSaveIcon[SAVE_ICON_SIZE] = {};
+static bool sSaveInfoSet = false;
+
+void SYS_SetSaveInfo(const char* title, const char* description, const uint8_t* iconRGB5A3)
+{
+    memset(sSaveComment, 0, sizeof(sSaveComment));
+    strncpy(sSaveComment, title, 31);
+    strncpy(sSaveComment + 32, description, 31);
+    memcpy(sSaveIcon, iconRGB5A3, SAVE_ICON_SIZE);
+    sSaveInfoSet = true;
+}
+
+// A save's file, in whole blocks. With save info: the comment at 0, the icon at 64, the data
+// after them at 2112 -- the card's menu only takes an icon that starts in the file's first 512
+// bytes (libogc refuses the status otherwise). Without: the data at 0, as saves always were.
+// Reading tells the two apart by the file's icon address (SaveDataOffset), so a save written
+// before there was an icon still reads back.
+#define SAVE_INFO_SIZE (SAVE_COMMENT_SIZE + SAVE_ICON_SIZE)
+
+static uint32_t SaveDataOffset(int32_t fileNo)
+{
+    card_stat stat;
+    if (CARD_GetStatus(CARD_SLOTA, fileNo, &stat) >= 0 &&
+        stat.icon_addr == SAVE_COMMENT_SIZE && stat.comment_addr == 0)
+    {
+        return SAVE_INFO_SIZE;
+    }
+    return 0;
+}
+
+static uint32_t SaveFileSize(uint32_t dataBytes, uint32_t sectorSize)
+{
+    uint32_t bytes = dataBytes + (sSaveInfoSet ? SAVE_INFO_SIZE : 0);
+    return ((bytes + sectorSize - 1) / sectorSize) * sectorSize;
+}
+
+static const char* CardErrorName(int32_t error)
+{
+    switch (error)
+    {
+    case CARD_ERROR_NOCARD: return "nocard";
+    case CARD_ERROR_WRONGDEVICE: return "wrongdevice";
+    case CARD_ERROR_BROKEN: return "damaged";
+    case CARD_ERROR_ENCODING: return "encoding";
+    case CARD_ERROR_BUSY: return "busy";
+    default: return "error";
+    }
+}
+
+// Whether a save of dataBytes can go on the card in slot A, before it is written.
+//   "exists"  a save of that name is there and will be written over
+//   "ready"   there is room for it, a new file of blocksNeeded blocks
+//   "full"    there is not: too few free blocks, or all 127 files used
+//   "nocard", "wrongdevice", "damaged" (unformatted or corrupt), "encoding" (a card of the
+//   other region's), "busy", "error": why the card cannot be used at all
+const char* SYS_GetSaveCardState(const char* saveName, uint32_t dataBytes, int32_t& blocksNeeded, int32_t& blocksFree)
+{
+    blocksNeeded = 0;
+    blocksFree = 0;
+    MountMemoryCard();
+    if (!IsMemoryCardMounted())
+    {
+        return CardErrorName(sCardMountResult);
+    }
+
+    uint32_t sectorSize = 8192;
+    CARD_GetSectorSize(CARD_SLOTA, &sectorSize);
+    uint32_t fileSize = SaveFileSize(dataBytes, sectorSize);
+    blocksNeeded = (int32_t)(fileSize / sectorSize);
+
+    u16 freeBlocks = 0;
+    int32_t err = CARD_GetFreeBlocks(CARD_SLOTA, &freeBlocks);
+    if (err < 0)
+    {
+        return CardErrorName(err);
+    }
+    blocksFree = freeBlocks;
+
+    card_file cardFile;
+    if (CARD_Open(CARD_SLOTA, saveName, &cardFile) >= 0)
+    {
+        uint32_t have = cardFile.len;
+        CARD_Close(&cardFile);
+        // Written over in place; a save that has outgrown its file is made again, and that
+        // needs the difference free.
+        if (have >= fileSize || (int32_t)((fileSize - have) / sectorSize) <= blocksFree)
+        {
+            return "exists";
+        }
+        return "full";
+    }
+
+    int32_t files = 0;
+    card_dir dir;
+    for (int32_t r = CARD_FindFirst(CARD_SLOTA, &dir, true); r >= 0; r = CARD_FindNext(&dir))
+    {
+        files++;
+    }
+    if (files >= CARD_MAXFILES || blocksNeeded > blocksFree)
+    {
+        return "full";
+    }
+    return "ready";
 }
 #endif
 
@@ -1175,13 +1301,17 @@ bool SYS_ReadSave(const char* saveName, Stream& outStream)
         if (cardError >= 0)
         {
             int32_t fileSize = ((cardFile.len + sectorSize - 1) / sectorSize) * sectorSize;
+            uint32_t dataAt = SaveDataOffset(cardFile.filenum);
 
             char* cardBuffer = (char*)SYS_AlignedMalloc(fileSize, 32);
-            CARD_Read(&cardFile, cardBuffer, sectorSize, 0);
-            success = true;
+            cardError = CARD_Read(&cardFile, cardBuffer, fileSize, 0);
+            success = (cardError >= 0);
 
             outStream.SetPos(0);
-            outStream.WriteBytes((uint8_t*) cardBuffer, fileSize);
+            if (success)
+            {
+                outStream.WriteBytes((uint8_t*) cardBuffer + dataAt, fileSize - dataAt);
+            }
             outStream.SetPos(0);
             SYS_AlignedFree(cardBuffer);
 
@@ -1241,10 +1371,18 @@ bool SYS_WriteSave(const char* saveName, Stream& stream)
         uint32_t sectorSize = 0;
         CARD_GetSectorSize(CARD_SLOTA, &sectorSize);
 
-        int32_t fileSize = ((stream.GetSize() + sectorSize - 1) / sectorSize) * sectorSize;
+        int32_t fileSize = (int32_t)SaveFileSize(stream.GetSize(), sectorSize);
 
         card_file cardFile;
         int32_t cardError = CARD_Open(CARD_SLOTA, saveName, &cardFile);
+
+        if (cardError >= 0 && (int32_t)cardFile.len < fileSize)
+        {
+            // Outgrown (an old save with no room for the icon, say): made again, bigger.
+            CARD_Close(&cardFile);
+            CARD_Delete(CARD_SLOTA, saveName);
+            cardError = CARD_ERROR_NOFILE;
+        }
 
         if (cardError < 0)
         {
@@ -1263,15 +1401,43 @@ bool SYS_WriteSave(const char* saveName, Stream& stream)
 
             //LogDebug("fileSize = %d, cardFile.len = %d, stream.GetSize() = %d", fileSize, cardFile.len, stream.GetSize());
             //OCT_ASSERT(fileSize == cardFile.len);
-            OCT_ASSERT(fileSize >= (int32_t)stream.GetSize());
-            memcpy(cardBuffer, stream.GetData(), stream.GetSize());
+            OCT_ASSERT(fileSize >= (int32_t)(stream.GetSize() + (sSaveInfoSet ? SAVE_INFO_SIZE : 0)));
+            memset(cardBuffer, 0, fileSize);
+            uint32_t commentAt = 0;
+            uint32_t iconAt = SAVE_COMMENT_SIZE;
+            uint32_t dataAt = sSaveInfoSet ? SAVE_INFO_SIZE : 0;
+            if (sSaveInfoSet)
+            {
+                memcpy(cardBuffer + commentAt, sSaveComment, SAVE_COMMENT_SIZE);
+                memcpy(cardBuffer + iconAt, sSaveIcon, SAVE_ICON_SIZE);
+            }
+            memcpy(cardBuffer + dataAt, stream.GetData(), stream.GetSize());
 
             cardError = CARD_Write(&cardFile, cardBuffer, fileSize, 0);
-            success = true;
+            success = (cardError >= 0);
 
             if (cardError < 0)
             {
                 LogError("Failed to write save to memory card. Error code = %d", cardError);
+            }
+            else if (sSaveInfoSet)
+            {
+                // Where the card's menu finds the name and the picture: one still icon, RGB5A3,
+                // no banner. (libogc's CARD_SetIconSpeed macro reads icon_fmt; set it directly.)
+                card_stat stat;
+                if (CARD_GetStatus(CARD_SLOTA, cardFile.filenum, &stat) >= 0)
+                {
+                    stat.banner_fmt = CARD_BANNER_NONE;
+                    stat.icon_addr = iconAt;
+                    stat.icon_fmt = CARD_ICON_RGB;
+                    stat.icon_speed = CARD_SPEED_SLOW;
+                    stat.comment_addr = commentAt;
+                    int32_t statError = CARD_SetStatus(CARD_SLOTA, cardFile.filenum, &stat);
+                    if (statError < 0)
+                    {
+                        LogError("Failed to set the save's icon. Error code = %d", statError);
+                    }
+                }
             }
 
             SYS_AlignedFree(cardBuffer);
@@ -1358,8 +1524,8 @@ void SYS_UnmountMemoryCard()
     {
         CARD_Unmount(CARD_SLOTA);
         GetEngineState()->mSystem.mMemoryCardMounted = false;
-        SYS_AlignedFree(GetEngineState()->mSystem.mMemoryCardMountArea);
-        GetEngineState()->mSystem.mMemoryCardMountArea = nullptr;
+        // The work area is kept for the next mount (see MountMemoryCard). This also runs from
+        // the card's detach callback, an interrupt, where freeing memory was never safe.
     }
 }
 

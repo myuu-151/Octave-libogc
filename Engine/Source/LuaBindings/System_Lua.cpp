@@ -16,9 +16,10 @@ int System_Lua::WriteSave(lua_State* L)
     const char* saveName = CHECK_STRING(L, 1);
     Stream& stream = CHECK_STREAM(L, 2);
 
-    SYS_WriteSave(saveName, stream);
+    bool ok = SYS_WriteSave(saveName, stream);
 
-    return 0;
+    lua_pushboolean(L, ok);
+    return 1;
 }
 
 int System_Lua::ReadSave(lua_State* L)
@@ -138,6 +139,61 @@ int System_Lua::GetFreeMemory(lua_State* L)
 extern "C" const char* OctSd_GetModeName(int chan);
 #endif
 
+// System.SetSaveInfo(title, description, iconHex) -- what the GameCube's memory card menu shows
+// for the game's saves: a title and a description, 31 characters each, and a 32 x 32 icon given
+// as 4096 hex digits, the 2048 bytes of an RGB5A3 texture in GX's tile order. Saves written
+// after this carry them. Does nothing on other platforms.
+//
+// System.GetSaveCard(saveName, dataBytes) -> state, blocksNeeded, blocksFree
+// Whether a save of that size can be written to slot A's card; see SYS_GetSaveCardState for the
+// states. "none" on platforms without memory cards.
+#if PLATFORM_GAMECUBE
+void SYS_SetSaveInfo(const char* title, const char* description, const uint8_t* iconRGB5A3);
+const char* SYS_GetSaveCardState(const char* saveName, uint32_t dataBytes, int32_t& blocksNeeded, int32_t& blocksFree);
+#endif
+
+int System_Lua::SetSaveInfo(lua_State* L)
+{
+    const char* title = CHECK_STRING(L, 1);
+    const char* description = CHECK_STRING(L, 2);
+    size_t hexLen = 0;
+    const char* hex = luaL_checklstring(L, 3, &hexLen);
+#if PLATFORM_GAMECUBE
+    uint8_t icon[32 * 32 * 2];
+    if (hexLen != sizeof(icon) * 2)
+    {
+        return luaL_error(L, "SetSaveInfo: the icon must be %d hex digits", (int)sizeof(icon) * 2);
+    }
+    for (size_t i = 0; i < sizeof(icon); ++i)
+    {
+        char pair[3] = { hex[i * 2], hex[i * 2 + 1], 0 };
+        icon[i] = (uint8_t)strtoul(pair, nullptr, 16);
+    }
+    SYS_SetSaveInfo(title, description, icon);
+#else
+    (void)title; (void)description; (void)hex; (void)hexLen;
+#endif
+    return 0;
+}
+
+int System_Lua::GetSaveCard(lua_State* L)
+{
+    const char* saveName = CHECK_STRING(L, 1);
+    int32_t dataBytes = (int32_t)luaL_checkinteger(L, 2);
+    const char* state = "none";
+    int32_t needed = 0;
+    int32_t freeBlocks = 0;
+#if PLATFORM_GAMECUBE
+    state = SYS_GetSaveCardState(saveName, (uint32_t)dataBytes, needed, freeBlocks);
+#else
+    (void)saveName; (void)dataBytes;
+#endif
+    lua_pushstring(L, state);
+    lua_pushinteger(L, needed);
+    lua_pushinteger(L, freeBlocks);
+    return 3;
+}
+
 int System_Lua::GetStorageMode(lua_State* L)
 {
 #if PLATFORM_GAMECUBE
@@ -186,6 +242,8 @@ void System_Lua::Bind()
 
     REGISTER_TABLE_FUNC(L, tableIdx, GetFreeMemory);
     REGISTER_TABLE_FUNC(L, tableIdx, GetStorageMode);
+    REGISTER_TABLE_FUNC(L, tableIdx, SetSaveInfo);
+    REGISTER_TABLE_FUNC(L, tableIdx, GetSaveCard);
     REGISTER_TABLE_FUNC(L, tableIdx, GetPerfReport);
 
     REGISTER_TABLE_FUNC(L, tableIdx, SetScreenOrientation);

@@ -15,6 +15,8 @@ struct System_Lua
     static int UnmountMemoryCard(lua_State* L);
     static int GetFreeMemory(lua_State* L);
     static int GetStorageMode(lua_State* L);
+    static int SetSaveInfo(lua_State* L);
+    static int GetSaveCard(lua_State* L);
     static int GetPerfReport(lua_State* L);
 
     static int SetScreenOrientation(lua_State* L);
