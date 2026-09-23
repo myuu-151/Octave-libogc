@@ -4,6 +4,7 @@
 #include "AssetManager.h"
 #include "Utilities.h"
 #include "Log.h"
+#include <new>
 
 #include "Graphics/Graphics.h"
 
@@ -921,6 +922,15 @@ void StaticMesh::ResizeVertexArray(uint32_t newSize)
         {
             mVertices = malloc(sizeof(Vertex) * newSize);
         }
+
+        // malloc says "out of memory" by returning null, where new throws. A null array was then
+        // written through (a DSI on the GameCube, loading a big mesh with memory nearly gone).
+        // Throw as new would: on the async loader that fails the load and leaves the asset unloaded.
+        if (mVertices == nullptr)
+        {
+            LogError("Mesh %s: out of memory for %u vertices", GetName().c_str(), newSize);
+            throw std::bad_alloc();
+        }
     }
 }
 
@@ -935,6 +945,12 @@ void StaticMesh::ResizeIndexArray(uint32_t newSize)
     if (newSize > 0)
     {
         mIndices = (IndexType*)malloc(sizeof(IndexType) * newSize);
+
+        if (mIndices == nullptr)
+        {
+            LogError("Mesh %s: out of memory for %u indices", GetName().c_str(), newSize);
+            throw std::bad_alloc();       // see ResizeVertexArray
+        }
     }
 }
 

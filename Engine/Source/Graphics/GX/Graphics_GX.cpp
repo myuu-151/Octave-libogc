@@ -744,11 +744,11 @@ void GFX_DrawStaticMeshComp(StaticMesh3D* staticMeshComp, StaticMesh* meshOverri
                 meshResource->mColorDisplayList = CreateMeshDisplayList(mesh, true, meshResource->mColorDisplayListSize);
             }
 
-            GX_CallDispList(meshResource->mColorDisplayList, meshResource->mColorDisplayListSize);
+            CallMeshDisplayList(meshResource->mColorDisplayList, meshResource->mColorDisplayListSize);
         }
         else
         {
-            GX_CallDispList(meshResource->mDisplayList, meshResource->mDisplayListSize);
+            CallMeshDisplayList(meshResource->mDisplayList, meshResource->mDisplayListSize);
         }
 
         if (material->GetVertexColorMode() == VertexColorMode::TextureBlend)
@@ -1007,7 +1007,7 @@ void GFX_DrawShadowMeshComp(ShadowMesh3D* shadowMeshComp)
         GX_SetColorUpdate(GX_FALSE);
         GX_SetAlphaUpdate(GX_TRUE);
         GX_SetCullMode(GX_CULL_BACK); // Reverse triangle winding
-        GX_CallDispList(mesh->GetResource()->mDisplayList, mesh->GetResource()->mDisplayListSize);
+        CallMeshDisplayList(mesh->GetResource()->mDisplayList, mesh->GetResource()->mDisplayListSize);
 
         // (2) Front faces
         GX_SetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE);
@@ -1015,7 +1015,7 @@ void GFX_DrawShadowMeshComp(ShadowMesh3D* shadowMeshComp)
         GX_SetColorUpdate(GX_TRUE);
         GX_SetAlphaUpdate(GX_FALSE);
         GX_SetCullMode(GX_CULL_FRONT); // Reverse triangle winding
-        GX_CallDispList(mesh->GetResource()->mDisplayList, mesh->GetResource()->mDisplayListSize);
+        CallMeshDisplayList(mesh->GetResource()->mDisplayList, mesh->GetResource()->mDisplayListSize);
 
         // (3) Clear alpha channel
         GX_SetZMode(GX_FALSE, GX_LEQUAL, GX_FALSE);
@@ -1023,7 +1023,7 @@ void GFX_DrawShadowMeshComp(ShadowMesh3D* shadowMeshComp)
         GX_SetColorUpdate(GX_FALSE);
         GX_SetAlphaUpdate(GX_TRUE);
         GX_SetCullMode(GX_CULL_FRONT); // Reverse triangle winding
-        GX_CallDispList(mesh->GetResource()->mDisplayList, mesh->GetResource()->mDisplayListSize);
+        CallMeshDisplayList(mesh->GetResource()->mDisplayList, mesh->GetResource()->mDisplayListSize);
     }
 }
 

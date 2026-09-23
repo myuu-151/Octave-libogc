@@ -7,6 +7,7 @@
 #include "World.h"
 #include "Engine.h"
 #include "Renderer.h"
+#include "Log.h"
 #include "Vertex.h"
 #include "Nodes/Widgets/Widget.h"
 #include "Assets/SkeletalMesh.h"
@@ -714,6 +715,15 @@ void ApplyWidgetRotation(Mtx& mtx, Widget* widget)
     guMtxConcat(rotMat, srcMat, mtx);
 }
 
+// A mesh's display list, if it has one: a mesh that ran out of memory building it has none.
+void CallMeshDisplayList(void* displayList, uint32_t size)
+{
+    if (displayList != nullptr && size > 0)
+    {
+        GX_CallDispList(displayList, size);
+    }
+}
+
 void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& outSize)
 {
     void* displayList = nullptr;
@@ -739,6 +749,15 @@ void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& out
     allocSize = (allocSize + 0x1f) & (~0x1f); // 32 byte aligned
     allocSize += 64; // Extra space to account for pipe flush
     displayList = memalign(32, allocSize);
+
+    // Out of memory: no list, and the mesh is not drawn (CallMeshDisplayList skips it), rather
+    // than a list written through a null pointer.
+    if (displayList == nullptr)
+    {
+        LogError("Mesh %s: out of memory for its %u byte display list", staticMesh->GetName().c_str(), allocSize);
+        outSize = 0;
+        return nullptr;
+    }
 
     // This invalidate is needed because the write-gather pipe does not use the cache.
     DCInvalidateRange(displayList, allocSize);

@@ -31,6 +31,7 @@ uint8_t ConfigTev(uint8_t tevStage, uint32_t textureSlot, TevMode mode, bool ver
 void ApplyWidgetRotation(Mtx& mtx, Widget* widget);
 
 void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& outSize);
+void CallMeshDisplayList(void* displayList, uint32_t size);
 void DestroyMeshDisplayList(void* displayList);
 
 #endif
