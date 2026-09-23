@@ -1880,7 +1880,24 @@ void AssetManager::UpdateEndLoadQueue()
                 }
                 else if (stub->mAsset != nullptr)
                 {
-                    LogWarning("AsyncLoadRequest not finished because the asset has already been loaded");
+                    // Loaded another way while this was in flight: by a LoadAsset, or as another
+                    // asset's dependency, or forced below after too many requeues. The refs waiting
+                    // on this request used to be left waiting for ever -- their IsLoaded never came
+                    // true -- and the copy just read was leaked. Hand them the loaded asset and let
+                    // the copy go.
+                    LogDebug("Async load of %s: already loaded; handing that over", loadRequest->mName.c_str());
+                    loadRequest->mAsset->Destroy();
+                    delete loadRequest->mAsset;
+                    loadRequest->mAsset = nullptr;
+
+                    for (int32_t i = int32_t(loadRequest->mTargetRefs.size()) - 1; i >= 0; --i)
+                    {
+                        if (loadRequest->mTargetRefs[i] != nullptr)
+                        {
+                            // (clears the ref's load request, and its entry in mTargetRefs)
+                            (*loadRequest->mTargetRefs[i]) = stub->mAsset;
+                        }
+                    }
                 }
                 else
                 {

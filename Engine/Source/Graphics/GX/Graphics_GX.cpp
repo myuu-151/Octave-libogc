@@ -446,6 +446,7 @@ void GFX_CreateTextureResource(Texture* texture, std::vector<uint8_t>& data)
     }
 
     memcpy(resource->mTplData, data.data(), data.size());
+    resource->mTplSize = (uint32_t)data.size();
 
     TPL_OpenTPLFromMemory(&resource->mTplFile, resource->mTplData, (uint32_t)data.size());
     TPL_GetTexture(&resource->mTplFile, 0, &resource->mGxTexObj);
@@ -618,7 +619,7 @@ void GFX_CreateStaticMeshResource(StaticMesh* staticMesh, bool hasColor, uint32_
     // We need to rearrange the vertex color data?
     // Apparently dolphin expects rgba reversed
     // TODO: Do this when cooking assets for Dolphin platforms.
-    if (hasColor)
+    if (hasColor && !staticMesh->HasCompactVertices())     // (a compact array is done below)
     {
         VertexColor* vertices = staticMesh->GetColorVertices();
         for (uint32_t i = 0; i < numVertices; ++i)
@@ -627,6 +628,55 @@ void GFX_CreateStaticMeshResource(StaticMesh* staticMesh, bool hasColor, uint32_
         }
     }
     
+    // Compact (opt in, GFX_SetCompactUnlitMeshes): vertex colours, an unlit untextured material,
+    // no triangle collision to build from the full arrays. See BindStaticMesh.
+    struct CompactVertex { float mX, mY, mZ; uint32_t mColor; };
+    if (staticMesh->HasCompactVertices())
+    {
+        // read compact (StaticMesh::LoadStream): its colours into GX's order, and the array kept
+        CompactVertex* compactVerts = (CompactVertex*)staticMesh->GetColorVertices();
+        for (uint32_t i = 0; i < numVertices; ++i)
+        {
+            ReverseColorUint32(compactVerts[i].mColor);
+        }
+        DCFlushRange(compactVerts, numVertices * sizeof(CompactVertex));
+        resource->mColorDisplayList = CreateMeshDisplayList(staticMesh, true, resource->mColorDisplayListSize, true);
+        resource->mCompactVertices = staticMesh->TakeVertexArray();
+        resource->mCompact = true;
+        LogDebug("Mesh %s: compact (%u vertices)", staticMesh->GetName().c_str(), numVertices);
+        return;
+    }
+
+    bool compact = GFX_GetCompactUnlitMeshes() && hasColor && numVertices > 0 &&
+                   GFX_MaterialAllowsCompact(staticMesh->GetMaterial()) &&
+                   !staticMesh->IsTriangleCollisionMeshEnabled();
+
+    if (compact)
+    {
+        CompactVertex* out = (CompactVertex*)memalign(32, numVertices * sizeof(CompactVertex));
+        if (out != nullptr)
+        {
+            const VertexColor* src = staticMesh->GetColorVertices();
+            for (uint32_t i = 0; i < numVertices; ++i)
+            {
+                out[i].mX = src[i].mPosition.x;
+                out[i].mY = src[i].mPosition.y;
+                out[i].mZ = src[i].mPosition.z;
+                out[i].mColor = src[i].mColor;          // already in GX's order (above)
+            }
+            DCFlushRange(out, numVertices * sizeof(CompactVertex));
+            resource->mColorDisplayList = CreateMeshDisplayList(staticMesh, true, resource->mColorDisplayListSize, true);
+            if (resource->mColorDisplayList != nullptr)
+            {
+                resource->mCompactVertices = out;
+                resource->mCompact = true;
+                return;
+            }
+            free(out);
+        }
+        // no room to make it compact: the ordinary way below
+    }
+
     if (hasColor)
     {
         resource->mColorDisplayList = CreateMeshDisplayList(staticMesh, true, resource->mColorDisplayListSize);
@@ -654,6 +704,13 @@ void GFX_DestroyStaticMeshResource(StaticMesh* staticMesh)
         resource->mColorDisplayList = nullptr;
         resource->mColorDisplayListSize = 0;
     }
+
+    if (resource->mCompactVertices != nullptr)
+    {
+        free(resource->mCompactVertices);
+        resource->mCompactVertices = nullptr;
+    }
+    resource->mCompact = false;
 }
 
 // SkeletalMesh

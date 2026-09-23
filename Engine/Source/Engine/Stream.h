@@ -34,6 +34,11 @@ public:
     void SetExternalData(const char* externalData, uint32_t externalSize);
 
     bool ReadFile(const char* path, bool isAsset, int32_t maxSize = 0);
+    // A big file read through a small window that is refilled from the file as reading moves
+    // along, instead of into one buffer the file's size (see Stream.cpp). Only for readers that
+    // go front to back through Read*/ReadBytes/ReadString; GetData() is the window.
+    bool ReadFileWindowed(const char* path, bool isAsset, uint32_t fileSize);
+    bool HasReadFailed() const { return mReadFailed; }
     bool WriteFile(const char* path);
 
     void SetAsyncRequest(AsyncLoadRequest* request);
@@ -90,14 +95,23 @@ private:
 
     void Grow(uint32_t newSize);
     void Reserve(uint32_t capacity);
+    void ReadWindowed(void* dst, uint32_t length);
+    bool FillWindow(uint32_t pos);
 
     template<typename T>
     void Read(T& dst)
     {
         OCT_ASSERT(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4);
         OCT_ASSERT(mPos + sizeof(T) <= mSize);
-        memcpy(&dst, &mData[mPos], sizeof(T));
-        mPos += sizeof(T);
+        if (mWindowed)
+        {
+            ReadWindowed(&dst, sizeof(T));
+        }
+        else
+        {
+            memcpy(&dst, &mData[mPos], sizeof(T));
+            mPos += sizeof(T);
+        }
 
 #if ENDIAN_SWAP
         if (sizeof(T) == 4)
@@ -152,4 +166,13 @@ private:
     // overrunning the buffer, so the data is known to be incomplete instead of the heap being
     // quietly corrupted.
     bool mAllocFailed = false;
+
+    // Windowed reading (ReadFileWindowed): mData holds the file's bytes from mWindowStart, mWindowLen
+    // of them; mPos and mSize are positions in the FILE.
+    bool mWindowed = false;
+    bool mWindowAsset = false;
+    bool mReadFailed = false;
+    uint32_t mWindowStart = 0;
+    uint32_t mWindowLen = 0;
+    std::string mWindowPath;
 };

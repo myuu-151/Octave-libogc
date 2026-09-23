@@ -4,6 +4,9 @@
 #include "Utilities.h"
 
 #include "LuaBindings/Renderer_Lua.h"
+#if API_GX
+#include "Graphics/GX/GxUtils.h"
+#endif
 #include "LuaBindings/LuaUtils.h"
 #include "LuaBindings/Vector_Lua.h"
 #include "LuaBindings/Asset_Lua.h"
@@ -91,6 +94,20 @@ int Renderer_Lua::GetScreenIndex(lua_State* L)
 
     lua_pushinteger(L, ret);
     return 1;
+}
+
+// Renderer.SetCompactUnlitMeshes(on): GameCube/Wii only (a no-op elsewhere). Meshes loaded from
+// then on with vertex colours and an unlit, untextured material are kept as position and colour
+// alone -- a third of the memory. See GxUtils.cpp's BindStaticMesh.
+int Renderer_Lua::SetCompactUnlitMeshes(lua_State* L)
+{
+    bool compact = CHECK_BOOLEAN(L, 1);
+#if API_GX
+    GFX_SetCompactUnlitMeshes(compact);
+#else
+    (void)compact;
+#endif
+    return 0;
 }
 
 int Renderer_Lua::GetScreenResolution(lua_State* L)
@@ -366,6 +383,8 @@ void Renderer_Lua::Bind()
     REGISTER_TABLE_FUNC(L, tableIdx, GetFrameIndex);
 
     REGISTER_TABLE_FUNC(L, tableIdx, GetScreenIndex);
+
+    REGISTER_TABLE_FUNC(L, tableIdx, SetCompactUnlitMeshes);
 
     REGISTER_TABLE_FUNC(L, tableIdx, GetScreenResolution);
 

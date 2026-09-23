@@ -25,6 +25,15 @@ int Texture_Lua::IsRenderTarget(lua_State* L)
     return 1;
 }
 
+int Texture_Lua::ReloadFrom(lua_State* L)
+{
+    Texture* texture = CHECK_TEXTURE(L, 1);
+    const char* name = CHECK_STRING(L, 2);
+
+    lua_pushboolean(L, texture->ReloadFrom(name));
+    return 1;
+}
+
 int Texture_Lua::GetWidth(lua_State* L)
 {
     Texture* texture = CHECK_TEXTURE(L, 1);
@@ -108,6 +117,8 @@ void Texture_Lua::Bind()
     REGISTER_TABLE_FUNC(L, mtIndex, IsMipmapped);
 
     REGISTER_TABLE_FUNC(L, mtIndex, IsRenderTarget);
+
+    REGISTER_TABLE_FUNC(L, mtIndex, ReloadFrom);
 
     REGISTER_TABLE_FUNC(L, mtIndex, GetWidth);
 

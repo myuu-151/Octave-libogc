@@ -109,6 +109,9 @@ int System_Lua::SetWindowTitle(lua_State* L)
 #include <malloc.h>
 #include <ogc/system.h>
 #endif
+#if PLATFORM_GAMECUBE
+size_t BigBlockCacheBytes();    // BigBlockCache_Dolphin.cpp: freed blocks kept for reuse
+#endif
 
 int System_Lua::GetFreeMemory(lua_State* L)
 {
@@ -118,6 +121,9 @@ int System_Lua::GetFreeMemory(lua_State* L)
     struct mallinfo info = mallinfo();
     freeBytes = lua_Integer(info.fordblks) +
                 lua_Integer((char*)SYS_GetArena1Hi() - (char*)SYS_GetArena1Lo());
+#endif
+#if PLATFORM_GAMECUBE
+    freeBytes += lua_Integer(BigBlockCacheBytes());     // held for reuse, but free all the same
 #endif
 
     lua_pushinteger(L, freeBytes);

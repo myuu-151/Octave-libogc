@@ -33,6 +33,7 @@ public:
 
     // Asset Interface
     virtual void LoadStream(Stream& stream, Platform platform) override;
+    virtual bool CanLoadWindowed() const override { return true; }
     virtual void SaveStream(Stream& stream, Platform platform) override;
     virtual void Create() override;
     virtual void Destroy() override;
@@ -63,6 +64,13 @@ public:
 
     void SetGenerateTriangleCollisionMesh(bool generate);
     bool IsTriangleCollisionMeshEnabled() const;
+    // GX: the mesh was made compact (GFX_SetCompactUnlitMeshes) and needs its full arrays no more.
+    void ReleaseSourceArrays();
+    // GX: the vertices were read straight into the compact form (position, colour: 16 bytes).
+    bool HasCompactVertices() const { return mCompactVertices; }
+    // Hands the vertex array over (the compact renderer keeps it) and forgets it.
+    void* TakeVertexArray();
+    glm::vec3 GetVertexPosition(uint32_t index);
     uint32_t GetVertexSize() const;
 
     static bool HandlePropChange(Datum* datum, uint32_t index, const void* newValue);
@@ -102,6 +110,7 @@ private:
     btTriangleInfoMap* mTriangleInfoMap;
     bool mGenerateTriangleCollisionMesh;
     bool mHasVertexColor;
+    bool mCompactVertices = false;
 
     // Graphics Resource
     StaticMeshResource mResource;

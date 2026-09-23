@@ -1,4 +1,9 @@
 #include "Assets/Texture.h"
+#include "System/System.h"
+#include "AssetManager.h"
+#if API_GX
+#include <gccore.h>
+#endif
 #include "Assets/CmprEncoder.h"
 #include "Renderer.h"
 #include "Log.h"
@@ -474,6 +479,94 @@ Texture::~Texture()
 TextureResource* Texture::GetResource()
 {
     return &mResource;
+}
+
+// WHY. A GameCube game that changes between skies frees eight 512 KB star frames and loads eight
+// more of exactly the same size, each time. With malloc that cuts the heap up: a few changes in,
+// with megabytes free, no single 512 KB block is left and the frames fail to load. The textures
+// themselves are interchangeable -- same size, same format -- so here the new texels go into the
+// buffer that is already there. The asset keeps its own name; only its picture changes.
+bool Texture::ReloadFrom(const std::string& assetName)
+{
+#if API_GX && !EDITOR
+    TextureResource* resource = GetResource();
+    AssetStub* stub = AssetManager::Get()->GetAssetStub(assetName);
+    if (!IsLoaded() || IsDynamic() || resource->mTplData == nullptr || stub == nullptr || stub->mPath.empty())
+    {
+        return false;
+    }
+
+    // The header: where the texels begin, and how many there are. It is well under 256 bytes.
+    char head[256];
+    if (!SYS_ReadFileRange(stub->mPath.c_str(), true, 0, sizeof(head), head))
+    {
+        return false;
+    }
+
+    Stream stream(head, sizeof(head));
+    AssetHeader header = Asset::ReadHeader(stream);
+    if (header.mType != GetType())
+    {
+        return false;
+    }
+    stream.SetAssetVersion(header.mVersion);
+    std::string name;
+    stream.ReadString(name);
+
+    uint32_t width = stream.ReadUint32();
+    uint32_t height = stream.ReadUint32();
+    uint32_t mips = stream.ReadUint32();
+    stream.ReadUint32();                                // layers
+    PixelFormat format = (PixelFormat)stream.ReadUint32();
+    stream.ReadUint32();                                // filter
+    stream.ReadUint32();                                // wrap
+    stream.ReadBool();                                  // mipmapped
+    stream.ReadBool();                                  // render target
+    stream.ReadBool();                                  // sRGB
+    if (header.mVersion >= ASSET_VERSION_TEXTURE_LOW_QUALITY)
+    {
+        stream.ReadBool();
+        stream.ReadUint8();
+    }
+    if (header.mVersion >= ASSET_VERSION_TEXTURE_COOKED_PROPERTIES)
+    {
+        width = stream.ReadUint32();
+        height = stream.ReadUint32();
+        mips = stream.ReadUint32();
+        stream.ReadUint32();                            // filter
+    }
+    uint32_t size = stream.ReadUint32();
+    uint32_t offset = stream.GetPos();
+
+    if (width != mWidth || height != mHeight || mips != mMipLevels || format != mFormat ||
+        size != resource->mTplSize || offset >= sizeof(head))
+    {
+        LogWarning("Texture %s: cannot take %s's texels in place (a different size or format)",
+                   GetName().c_str(), assetName.c_str());
+        return false;
+    }
+
+    // Straight into the buffer, 32 KB at a time (each read bounces through a buffer of that size).
+    const uint32_t kPiece = 32 * 1024;
+    char* dst = (char*)resource->mTplData;
+    for (uint32_t at = 0; at < size; at += kPiece)
+    {
+        uint32_t n = (size - at < kPiece) ? (size - at) : kPiece;
+        if (!SYS_ReadFileRange(stub->mPath.c_str(), true, offset + at, n, dst + at))
+        {
+            LogError("Texture %s: reading %s failed part way; the picture is mixed", GetName().c_str(),
+                     assetName.c_str());
+            return false;
+        }
+    }
+
+    DCFlushRange(resource->mTplData, size);
+    GX_InvalidateTexAll();
+    return true;
+#else
+    (void)assetName;
+    return false;
+#endif
 }
 
 void Texture::LoadStream(Stream& stream, Platform platform)

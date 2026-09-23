@@ -30,7 +30,10 @@ uint8_t ConfigTev(uint8_t tevStage, uint32_t textureSlot, TevMode mode, bool ver
 
 void ApplyWidgetRotation(Mtx& mtx, Widget* widget);
 
-void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& outSize);
+void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& outSize, bool compact = false);
+void GFX_SetCompactUnlitMeshes(bool compact);
+bool GFX_GetCompactUnlitMeshes();
+bool GFX_MaterialAllowsCompact(class Material* material);
 void CallMeshDisplayList(void* displayList, uint32_t size);
 void DestroyMeshDisplayList(void* displayList);
 

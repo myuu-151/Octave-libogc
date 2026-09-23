@@ -129,6 +129,7 @@ struct TextureResource
     GXTexObj mGxTexObj = {};
     TPLFile mTplFile = {};
     void* mTplData = nullptr;
+    uint32_t mTplSize = 0;          // bytes in mTplData (Texture::ReloadFrom refills it in place)
     // Dynamic textures: GX_TF_RGBA8 texels, or the Y plane of a YUV texture.
     void* mDynamicData = nullptr;
     uint32_t mDynamicSize = 0;
@@ -161,6 +162,10 @@ struct StaticMeshResource
     uint32_t mDisplayListSize = 0;
     void* mColorDisplayList = nullptr;
     uint32_t mColorDisplayListSize = 0;
+    // COMPACT (GFX_SetCompactUnlitMeshes): position and colour only, 16 bytes a vertex, and the
+    // mesh's full-size arrays let go. mColorDisplayList then indexes into this.
+    void* mCompactVertices = nullptr;
+    bool mCompact = false;
 #elif API_C3D
     void* mVertexData = nullptr;
     void* mIndexData = nullptr;

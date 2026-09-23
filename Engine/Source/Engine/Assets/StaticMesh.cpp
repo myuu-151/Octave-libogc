@@ -7,6 +7,10 @@
 #include <new>
 
 #include "Graphics/Graphics.h"
+#if API_GX
+#include "Graphics/GX/GxUtils.h"
+#endif
+#include "Assets/Material.h"
 
 #if EDITOR
 #include <assimp/Importer.hpp>
@@ -126,13 +130,62 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
     mGenerateTriangleCollisionMesh = stream.ReadBool();
     mHasVertexColor = stream.ReadBool();
 
-    ResizeVertexArray(mNumVertices);
+    mCompactVertices = false;
+#if API_GX && !EDITOR
+    // READ STRAIGHT INTO THE COMPACT FORM when the mesh will be drawn compact (GxUtils.cpp,
+    // BindStaticMesh): position and colour, 16 bytes a vertex instead of 44. Made compact after
+    // loading, a pipe piece still needed its full 430 KB array for a moment, in one block, and on
+    // a GameCube some stages in there was no such block. The material has to be known now to
+    // decide; it is when it is already loaded (the stage's is: the rings use it). If it is not,
+    // the mesh loads the ordinary way and may still be made compact when it is created.
+    if (mHasVertexColor && !mGenerateTriangleCollisionMesh && GFX_GetCompactUnlitMeshes() &&
+        GFX_MaterialAllowsCompact(GetMaterial()))
+    {
+        struct CompactVertex { float mX, mY, mZ; uint32_t mColor; };
+        mVertices = malloc(sizeof(CompactVertex) * (mNumVertices > 0 ? mNumVertices : 1));
+        if (mVertices == nullptr)
+        {
+            LogError("Mesh %s: out of memory for %u vertices", GetName().c_str(), mNumVertices);
+            throw std::bad_alloc();
+        }
+        mCompactVertices = true;
+
+        uint32_t colorScale = GetEngineConfig()->mColorScale;
+        uint32_t shiftCount = (colorScale != 1) ? (colorScale >> 1) : 0;
+        CompactVertex* vertices = (CompactVertex*)mVertices;
+        for (uint32_t i = 0; i < mNumVertices; ++i)
+        {
+            glm::vec3 position = stream.ReadVec3();
+            stream.ReadVec2();                      // texture coordinates: not drawn
+            stream.ReadVec2();
+            stream.ReadVec3();                      // normal: not drawn
+            uint32_t color = stream.ReadUint32();
+            if (shiftCount != 0)
+            {
+                uint8_t* color8 = (uint8_t*)(&color);
+                color8[0] = color8[0] >> shiftCount;
+                color8[1] = color8[1] >> shiftCount;
+                color8[2] = color8[2] >> shiftCount;
+                color8[3] = color8[3] >> shiftCount;
+            }
+            vertices[i] = { position.x, position.y, position.z, color };
+        }
+    }
+    else
+#endif
+    {
+        ResizeVertexArray(mNumVertices);
+    }
 
 #if EDITOR
     mPureVertexColors.clear();
 #endif
 
-    if (mHasVertexColor)
+    if (mCompactVertices)
+    {
+        // read above
+    }
+    else if (mHasVertexColor)
     {
         VertexColor* vertices = GetColorVertices();
         for (uint32_t i = 0; i < mNumVertices; ++i)
@@ -450,6 +503,10 @@ void StaticMesh::Create()
     Asset::Create();
 
     OCT_ASSERT(mNumVertices <= MAX_MESH_VERTEX_COUNT); // Vertex index must fit into IndexType width.
+
+    // Before the GPU resource: on GX a compact mesh lets go of its vertex array just after.
+    ComputeBounds();
+
     GFX_CreateStaticMeshResource(
         this,
         mHasVertexColor,
@@ -463,7 +520,38 @@ void StaticMesh::Create()
         CreateTriangleCollisionShape();
     }
 
-    ComputeBounds();
+#if API_GX
+    if (GetResource()->mCompact)
+    {
+        ReleaseSourceArrays();
+    }
+#endif
+}
+
+glm::vec3 StaticMesh::GetVertexPosition(uint32_t index)
+{
+    if (mCompactVertices)
+    {
+        const float* f = (const float*)((const uint8_t*)mVertices + index * 16);
+        return glm::vec3(f[0], f[1], f[2]);
+    }
+
+    return mHasVertexColor ? GetColorVertices()[index].mPosition : GetVertices()[index].mPosition;
+}
+
+void* StaticMesh::TakeVertexArray()
+{
+    void* vertices = mVertices;
+    mVertices = nullptr;
+    return vertices;
+}
+
+void StaticMesh::ReleaseSourceArrays()
+{
+    // mNumVertices and mNumIndices stay: they still say what the GPU resource holds.
+    mCompactVertices = false;
+    ResizeVertexArray(0);
+    ResizeIndexArray(0);
 }
 
 #if EDITOR
@@ -971,9 +1059,7 @@ void StaticMesh::ComputeBounds()
     for (uint32_t i = 0; i < mNumVertices; ++i)
     {
         glm::vec3 pos = 
-            hasColor ? 
-            GetColorVertices()[i].mPosition : 
-            GetVertices()[i].mPosition;
+            GetVertexPosition(i);
 
         boxMin = glm::min(boxMin, pos);
         boxMax = glm::max(boxMax, pos);
@@ -986,9 +1072,7 @@ void StaticMesh::ComputeBounds()
     for (uint32_t i = 0; i < mNumVertices; ++i)
     {
         glm::vec3 pos =
-            hasColor ?
-            GetColorVertices()[i].mPosition :
-            GetVertices()[i].mPosition;
+            GetVertexPosition(i);
 
         float dist = glm::distance(pos, mBounds.mCenter);
         maxDist = glm::max(maxDist, dist);

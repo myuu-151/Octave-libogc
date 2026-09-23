@@ -172,6 +172,11 @@ void Asset::DecrementRefCount()
     OCT_ASSERT(mRefCount >= 0 || AssetManager::Get()->IsPurging());
 }
 
+#if PLATFORM_DOLPHIN
+bool SYS_GetAssetFileSize(const char* path, uint32_t& outSize);     // System_Dolphin.cpp
+static const uint32_t kWindowedFrom = 64 * 1024;                     // files bigger than this
+#endif
+
 void Asset::LoadFile(const char* path, AsyncLoadRequest* request)
 {
     if (IsLoaded())
@@ -184,7 +189,22 @@ void Asset::LoadFile(const char* path, AsyncLoadRequest* request)
     // out of it was a read through a null pointer -- a DSI on the loader thread, which takes the
     // whole game down for one missing texture. Say which file, and leave the asset unloaded: the
     // caller can see that (IsLoaded) and carry on without it.
-    if (!stream.ReadFile(path, true, GetFileReadLimit(path)) || stream.GetSize() == 0)
+    bool read = false;
+#if PLATFORM_DOLPHIN
+    // A big mesh or texture on the console is read through a small window: the whole file in one
+    // buffer needed a free block the file's size on top of the asset's own (see Stream.cpp).
+    uint32_t fileSize = 0;
+    if (CanLoadWindowed() && SYS_GetAssetFileSize(path, fileSize) && fileSize > kWindowedFrom)
+    {
+        read = stream.ReadFileWindowed(path, true, fileSize);
+    }
+    else
+#endif
+    {
+        read = stream.ReadFile(path, true, GetFileReadLimit(path));
+    }
+
+    if (!read || stream.GetSize() == 0)
     {
         LogError("Asset '%s': could not read %s; left unloaded.", mName.c_str(), path);
         if (request != nullptr)
@@ -195,6 +215,17 @@ void Asset::LoadFile(const char* path, AsyncLoadRequest* request)
     }
 
     LoadStream(stream, GetPlatform());
+
+    // A windowed read can fail part way through (the disc): what was parsed is then incomplete.
+    if (stream.HasReadFailed())
+    {
+        LogError("Asset '%s': reading %s failed part way; left unloaded.", mName.c_str(), path);
+        if (request != nullptr)
+        {
+            request->mFailed = true;
+        }
+        return;
+    }
 
     // Only "finish" the load if not async.
     if (request == nullptr)

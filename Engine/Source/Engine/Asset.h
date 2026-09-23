@@ -124,6 +124,9 @@ public:
     // Bytes LoadFile() reads from the start of the file (0 = the whole file). Assets
     // that stream bulk data from their file at runtime return their metadata size.
     virtual int32_t GetFileReadLimit(const char* path);
+    // True for asset types whose LoadStream reads front to back with Read*/ReadBytes/ReadString
+    // only: on the consoles a big one is then read through a small window (Stream::ReadFileWindowed).
+    virtual bool CanLoadWindowed() const { return false; }
 
     virtual void LoadStream(Stream& stream, Platform platform);
     virtual void SaveStream(Stream& stream, Platform platform);

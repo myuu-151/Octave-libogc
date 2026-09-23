@@ -679,6 +679,26 @@ void SYS_ReleaseFileData(char* data)
 static FILE* sRangeFile = nullptr;
 static std::string sRangePath;
 
+// The size of an asset on the disc image, without reading it. False when it is not on one (a
+// loose file on the SD): the caller then reads it whole, as before.
+bool SYS_GetAssetFileSize(const char* path, uint32_t& outSize)
+{
+    if (!IsoMounted() && sIsoAttempts < 16)
+    {
+        sIsoAttempts++;
+        IsoLocate();
+    }
+
+    IsoEntry ent;
+    if (IsoMounted() && IsoFind(path, ent))
+    {
+        outSize = ent.size;
+        return true;
+    }
+
+    return false;
+}
+
 bool SYS_ReadFileRange(const char* path, bool isAsset, uint32_t offset, uint32_t size, char* outData)
 {
     if (outData == nullptr)

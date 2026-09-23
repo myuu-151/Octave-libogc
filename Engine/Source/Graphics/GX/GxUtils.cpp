@@ -468,8 +468,68 @@ void BindMaterial(MaterialLite* material, bool useVertexColor, bool useBakedLigh
     }
 }
 
+// COMPACT UNLIT MESHES (opt in: GFX_SetCompactUnlitMeshes, from Lua Renderer.SetCompactUnlitMeshes).
+// A mesh with vertex colours and an unlit, untextured material draws with its colours and
+// nothing else, yet it was kept as 44 bytes a vertex (normal, two sets of texture coordinates)
+// and 10 bytes a triangle corner in its display list. Compact, it is 16 and 4: a GameCube stage's
+// pipe went from 4.2 MB to 1.5 MB. Opt in because a compact mesh cannot then be drawn with a lit
+// or textured material put on it by a node -- there are no normals or coordinates left to draw it
+// with; it draws as its colours.
+static bool sCompactUnlitMeshes = false;
+
+void GFX_SetCompactUnlitMeshes(bool compact)
+{
+    sCompactUnlitMeshes = compact;
+}
+
+bool GFX_GetCompactUnlitMeshes()
+{
+    return sCompactUnlitMeshes;
+}
+
+// Unlit, untextured, and its vertex colours not blending textures: drawn by colour alone.
+bool GFX_MaterialAllowsCompact(Material* material)
+{
+    MaterialLite* lite = Material::AsLite(material);
+    if (lite == nullptr || lite->GetShadingModel() != ShadingModel::Unlit ||
+        lite->GetVertexColorMode() == VertexColorMode::TextureBlend)
+    {
+        return false;
+    }
+
+    // An empty slot answers with the engine's white texture: white read at any coordinate is white,
+    // so that draws the same with no coordinates at all.
+    Texture* white = Renderer::Get()->mWhiteTexture.Get<Texture>();
+    for (uint32_t slot = 0; slot < MATERIAL_LITE_MAX_TEXTURES; ++slot)
+    {
+        Texture* texture = lite->GetTexture(slot);
+        if (texture != nullptr && texture != white)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 void BindStaticMesh(StaticMesh* staticMesh, uint32_t* instanceColors)
 {
+    StaticMeshResource* resource = staticMesh->GetResource();
+    if (resource->mCompact)
+    {
+        // position and colour, from the compact array (instance colours cannot apply: the colours
+        // are the mesh's own, and its source arrays are gone)
+        GX_ClearVtxDesc();
+        GX_SetVtxDesc(GX_VA_POS, GX_INDEX16);
+        GX_SetVtxDesc(GX_VA_CLR0, GX_INDEX16);
+        GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+        GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+        uint8_t* compact = (uint8_t*)resource->mCompactVertices;
+        GX_SetArray(GX_VA_POS, compact, 16);
+        GX_SetArray(GX_VA_CLR0, compact + 12, 16);
+        return;
+    }
+
     uint8_t* vertBytes = staticMesh->HasVertexColor() ? (uint8_t*)staticMesh->GetColorVertices() : (uint8_t*)staticMesh->GetVertices();
     uint32_t numVertices = staticMesh->GetNumVertices();
 
@@ -715,122 +775,144 @@ void ApplyWidgetRotation(Mtx& mtx, Widget* widget)
     guMtxConcat(rotMat, srcMat, mtx);
 }
 
-// A mesh's display list, if it has one: a mesh that ran out of memory building it has none.
-void CallMeshDisplayList(void* displayList, uint32_t size)
+// A MESH'S DISPLAY LISTS, one per batch of at most kFacesPerList triangles, each its own block.
+// It was one list for the whole mesh: 636 KB in one piece for a pipe piece of 21,000 triangles,
+// which a GameCube that has been streaming stages in and out for a while no longer has anywhere
+// (see BigBlockCache_Dolphin.cpp). In batches the biggest block is about 60 KB. The handle the
+// renderer keeps (mDisplayList, mColorDisplayList) is a MeshLists; only these three functions
+// look inside it.
+//
+// (GX_Begin's vertex count is a u16, so one primitive can carry at most 65535 vertices -- 21845
+// triangles. A larger mesh once went out as one GX_Begin whose count wrapped, and the GP read the
+// surplus vertex data as commands. Batches this size are well under that.)
+namespace
 {
-    if (displayList != nullptr && size > 0)
+    const uint32_t kListBytes = 60 * 1024;      // about this much a list
+    const uint32_t kMaxFacesPerList = 21845;    // and never more than one GX_Begin can carry
+
+    struct MeshListPart
     {
-        GX_CallDispList(displayList, size);
+        void* mList;
+        uint32_t mSize;
+    };
+
+    struct MeshLists
+    {
+        uint32_t mCount;
+        MeshListPart mParts[1];             // mCount of them
+    };
+
+    void FreeMeshLists(MeshLists* lists, uint32_t built)
+    {
+        for (uint32_t i = 0; i < built; ++i)
+        {
+            free(lists->mParts[i].mList);
+        }
+        free(lists);
     }
 }
 
-void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& outSize)
+// A mesh's display lists, if it has them: a mesh that ran out of memory building them has none.
+void CallMeshDisplayList(void* displayList, uint32_t size)
 {
-    void* displayList = nullptr;
-
-    IndexType* indices = staticMesh->GetIndices();
-
-    // GX_Begin's vertex count is a u16, so one primitive can carry at most 65535 vertices --
-    // 21845 triangles, since 21845 * 3 is exactly 65535. A larger mesh used to be submitted in
-    // a single GX_Begin whose count silently wrapped: the list then declared far fewer vertices
-    // than it wrote, and the GP read the surplus vertex data as commands. That shows up as
-    // stray geometry shooting across the screen and "GFX FIFO: Unknown Opcode" in Dolphin.
-    //
-    // Split the mesh across as many primitives as it needs instead. Nothing else changes --
-    // the vertex data and its order are identical, it is only the batching that differs.
-    const uint32_t numFaces = staticMesh->GetNumFaces();
-    const uint32_t kMaxFacesPerBatch = 21845;
-    const uint32_t numBatches = (numFaces + kMaxFacesPerBatch - 1) / kMaxFacesPerBatch;
-
-    // Generate a display list
-    uint32_t gxBeginSize = 3 * (numBatches > 0 ? numBatches : 1);
-    uint32_t elemSize = useColor ? (2 + 2 + 2 + 2 + 2) : (2 + 2 + 2 + 2);
-    uint32_t allocSize = gxBeginSize + (elemSize * numFaces * 3);
-    allocSize = (allocSize + 0x1f) & (~0x1f); // 32 byte aligned
-    allocSize += 64; // Extra space to account for pipe flush
-    displayList = memalign(32, allocSize);
-
-    // Out of memory: no list, and the mesh is not drawn (CallMeshDisplayList skips it), rather
-    // than a list written through a null pointer.
-    if (displayList == nullptr)
+    MeshLists* lists = (MeshLists*)displayList;
+    if (lists == nullptr || size == 0)
     {
-        LogError("Mesh %s: out of memory for its %u byte display list", staticMesh->GetName().c_str(), allocSize);
-        outSize = 0;
+        return;
+    }
+
+    for (uint32_t i = 0; i < lists->mCount; ++i)
+    {
+        GX_CallDispList(lists->mParts[i].mList, lists->mParts[i].mSize);
+    }
+}
+
+void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& outSize, bool compact)
+{
+    outSize = 0;
+    IndexType* indices = staticMesh->GetIndices();
+    const uint32_t numFaces = staticMesh->GetNumFaces();
+    if (numFaces == 0 || indices == nullptr)
+    {
         return nullptr;
     }
 
-    // This invalidate is needed because the write-gather pipe does not use the cache.
-    DCInvalidateRange(displayList, allocSize);
-
-    GX_BeginDispList(displayList, allocSize);
-
-    for (uint32_t batch = 0; batch < numBatches; ++batch)
+    // position, normal, colour, two texture coordinates (16-bit indices each); compact: position, colour
+    const uint32_t elemSize = compact ? (2 + 2) : useColor ? (2 + 2 + 2 + 2 + 2) : (2 + 2 + 2 + 2);
+    uint32_t facesPerList = kListBytes / (elemSize * 3);
+    facesPerList = (facesPerList < kMaxFacesPerList) ? facesPerList : kMaxFacesPerList;
+    const uint32_t numLists = (numFaces + facesPerList - 1) / facesPerList;
+    MeshLists* lists = (MeshLists*)malloc(sizeof(MeshLists) + (numLists - 1) * sizeof(MeshListPart));
+    if (lists == nullptr)
     {
-    const uint32_t firstFace = batch * kMaxFacesPerBatch;
-    const uint32_t batchFaces = (numFaces - firstFace < kMaxFacesPerBatch)
-                              ? (numFaces - firstFace)
-                              : kMaxFacesPerBatch;
+        LogError("Mesh %s: out of memory for its display lists", staticMesh->GetName().c_str());
+        return nullptr;
+    }
+    lists->mCount = numLists;
 
-    GX_Begin(GX_TRIANGLES, GX_VTXFMT0, uint16_t(batchFaces * 3));
+    uint32_t total = 0;
 
-    if (useColor)
+    for (uint32_t part = 0; part < numLists; ++part)
     {
-        for (uint32_t i = firstFace; i < firstFace + batchFaces; ++i)
+        const uint32_t firstFace = part * facesPerList;
+        const uint32_t faces = (numFaces - firstFace < facesPerList) ? (numFaces - firstFace) : facesPerList;
+
+        uint32_t allocSize = 3 + elemSize * faces * 3;
+        allocSize = (allocSize + 0x1f) & (~0x1f);   // 32 byte aligned
+        allocSize += 64;                            // extra space to account for the pipe flush
+        void* displayList = memalign(32, allocSize);
+
+        // Out of memory: no lists at all, and the mesh is not drawn (CallMeshDisplayList skips
+        // it), rather than lists written through a null pointer.
+        if (displayList == nullptr)
         {
-            GX_Position1x16(uint16_t(indices[i * 3 + 0]));
-            GX_Normal1x16(uint16_t(indices[i * 3 + 0]));
-            GX_Color1x16(uint16_t(indices[i * 3 + 0]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 0]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 0]));
-
-            GX_Position1x16(uint16_t(indices[i * 3 + 1]));
-            GX_Normal1x16(uint16_t(indices[i * 3 + 1]));
-            GX_Color1x16(uint16_t(indices[i * 3 + 1]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 1]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 1]));
-
-            GX_Position1x16(uint16_t(indices[i * 3 + 2]));
-            GX_Normal1x16(uint16_t(indices[i * 3 + 2]));
-            GX_Color1x16(uint16_t(indices[i * 3 + 2]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 2]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 2]));
+            LogError("Mesh %s: out of memory for a %u byte display list", staticMesh->GetName().c_str(), allocSize);
+            FreeMeshLists(lists, part);
+            return nullptr;
         }
-    }
-    else
-    {
-        for (uint32_t i = firstFace; i < firstFace + batchFaces; ++i)
+
+        // This invalidate is needed because the write-gather pipe does not use the cache.
+        DCInvalidateRange(displayList, allocSize);
+        GX_BeginDispList(displayList, allocSize);
+        GX_Begin(GX_TRIANGLES, GX_VTXFMT0, uint16_t(faces * 3));
+
+        for (uint32_t i = firstFace; i < firstFace + faces; ++i)
         {
-            GX_Position1x16(uint16_t(indices[i * 3 + 0]));
-            GX_Normal1x16(uint16_t(indices[i * 3 + 0]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 0]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 0]));
-
-            GX_Position1x16(uint16_t(indices[i * 3 + 1]));
-            GX_Normal1x16(uint16_t(indices[i * 3 + 1]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 1]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 1]));
-
-            GX_Position1x16(uint16_t(indices[i * 3 + 2]));
-            GX_Normal1x16(uint16_t(indices[i * 3 + 2]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 2]));
-            GX_TexCoord1x16(uint16_t(indices[i * 3 + 2]));
+            for (uint32_t k = 0; k < 3; ++k)
+            {
+                uint16_t index = uint16_t(indices[i * 3 + k]);
+                GX_Position1x16(index);
+                if (compact)
+                {
+                    GX_Color1x16(index);
+                    continue;
+                }
+                GX_Normal1x16(index);
+                if (useColor)
+                {
+                    GX_Color1x16(index);
+                }
+                GX_TexCoord1x16(index);
+                GX_TexCoord1x16(index);
+            }
         }
+
+        GX_End();
+        lists->mParts[part].mList = displayList;
+        lists->mParts[part].mSize = GX_EndDispList();
+        OCT_ASSERT(lists->mParts[part].mSize != 0);
+        total += lists->mParts[part].mSize;
     }
 
-    GX_End();
-    }
-
-    outSize = GX_EndDispList();
-    OCT_ASSERT(outSize != 0);
-
-    return displayList;
+    outSize = total;
+    return lists;
 }
 
 void DestroyMeshDisplayList(void* displayList)
 {
     if (displayList != nullptr)
     {
-        free(displayList);
+        FreeMeshLists((MeshLists*)displayList, ((MeshLists*)displayList)->mCount);
     }
 }
 

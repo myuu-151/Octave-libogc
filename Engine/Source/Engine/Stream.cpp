@@ -3,6 +3,7 @@
 #include "AssetRef.h"
 #include "AssetManager.h"
 #include "Log.h"
+#include "System/System.h"
 #include "Maths.h"
 
 #include <malloc.h>
@@ -90,6 +91,11 @@ void Stream::Reset()
     mAssetVersion = ASSET_VERSION_CURRENT;
     mAsyncRequest = nullptr;
     mExternal = false;
+    mWindowed = false;
+    mReadFailed = false;
+    mWindowStart = 0;
+    mWindowLen = 0;
+    mWindowPath.clear();
 }
 
 void Stream::Resize(uint32_t size)
@@ -115,6 +121,95 @@ void Stream::SetAssetVersion(uint32_t version)
 uint32_t Stream::GetAssetVersion() const
 {
     return mAssetVersion;
+}
+
+// WINDOWED READING. A GameCube streaming its stages in and out loaded each asset by reading the
+// WHOLE FILE into one buffer and parsing it: a 576 KB pipe piece needed a free block of 576 KB
+// before it needed anything for itself, and a few stages in there was no such block left with
+// megabytes free. Here the file is read a window at a time as the parser moves through it; a read
+// bigger than the window (a texture's texels) goes straight from the file into its destination.
+// The largest block a load needs is then the asset's own. Only for readers that go front to back.
+static const uint32_t kStreamWindow = 32 * 1024;
+
+bool Stream::ReadFileWindowed(const char* path, bool isAsset, uint32_t fileSize)
+{
+    OCT_ASSERT(!mExternal);
+    Reset();
+
+    mData = (char*)malloc(kStreamWindow);
+    if (mData == nullptr)
+    {
+        LogError("Stream: no room for a %u byte window reading %s.", kStreamWindow, path);
+        return false;
+    }
+
+    mCapacity = kStreamWindow;
+    mSize = fileSize;
+    mPos = 0;
+    mWindowed = true;
+    mWindowAsset = isAsset;
+    mWindowPath = path;
+    return FillWindow(0);
+}
+
+bool Stream::FillWindow(uint32_t pos)
+{
+    uint32_t n = (mSize - pos < kStreamWindow) ? (mSize - pos) : kStreamWindow;
+    mWindowStart = pos;
+    mWindowLen = 0;
+
+    if (n == 0 || !SYS_ReadFileRange(mWindowPath.c_str(), mWindowAsset, pos, n, mData))
+    {
+        LogError("Stream: reading %s at %u failed.", mWindowPath.c_str(), pos);
+        mReadFailed = true;
+        return false;
+    }
+
+    mWindowLen = n;
+    return true;
+}
+
+void Stream::ReadWindowed(void* dst, uint32_t length)
+{
+    uint8_t* out = (uint8_t*)dst;
+
+    while (length > 0)
+    {
+        if (mPos >= mWindowStart && mPos < mWindowStart + mWindowLen)
+        {
+            // from the window
+            uint32_t n = mWindowStart + mWindowLen - mPos;
+            n = (length < n) ? length : n;
+            memcpy(out, &mData[mPos - mWindowStart], n);
+            out += n;
+            mPos += n;
+            length -= n;
+        }
+        else if (length >= kStreamWindow)
+        {
+            // a big read: straight from the file into its destination, a window's worth at a time
+            if (mReadFailed || !SYS_ReadFileRange(mWindowPath.c_str(), mWindowAsset, mPos, kStreamWindow, (char*)out))
+            {
+                mReadFailed = true;
+                break;
+            }
+            out += kStreamWindow;
+            mPos += kStreamWindow;
+            length -= kStreamWindow;
+        }
+        else if (mReadFailed || mPos >= mSize || !FillWindow(mPos))
+        {
+            break;
+        }
+    }
+
+    if (length > 0)
+    {
+        // Past the end or a failed read: zeros, and the stream says so (HasReadFailed).
+        memset(out, 0, length);
+        mPos += length;
+        mReadFailed = true;
+    }
 }
 
 bool Stream::ReadFile(const char* path, bool isAsset, int32_t maxSize)
@@ -453,8 +548,15 @@ void Stream::ReadString(std::string& dst)
     if (stringSize > 0)
     {
         OCT_ASSERT(mPos + stringSize <= mSize);
-        dst.assign(&mData[mPos], stringSize);
-        mPos += stringSize;
+        if (mWindowed)
+        {
+            ReadWindowed(&dst[0], stringSize);
+        }
+        else
+        {
+            dst.assign(&mData[mPos], stringSize);
+            mPos += stringSize;
+        }
     }
     else
     {
@@ -489,6 +591,12 @@ void Stream::ReadBytes(uint8_t* dst, uint32_t length)
 
     if (length > 0)
     {
+        if (mWindowed)
+        {
+            ReadWindowed(dst, length);
+            return;
+        }
+
         memcpy(dst, &mData[mPos], length);
         mPos += length;
     }

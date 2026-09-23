@@ -18,8 +18,14 @@ public:
 
     TextureResource* GetResource();
 
+    // Console only (GX): fill THIS texture's existing buffer with another texture asset's texels,
+    // read straight off the disc in small pieces, when the two are the same size and format.
+    // Nothing big is allocated or freed -- see the .cpp. False (and nothing changed) otherwise.
+    bool ReloadFrom(const std::string& assetName);
+
     // Asset Interface
     virtual void LoadStream(Stream& stream, Platform platform) override;
+    virtual bool CanLoadWindowed() const override { return true; }
     virtual void SaveStream(Stream& stream, Platform platform) override;
     virtual void Create() override;
     virtual void Destroy() override;
