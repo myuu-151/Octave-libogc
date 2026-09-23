@@ -994,6 +994,16 @@ void ActionManager::BuildData(Platform platform, bool embedded)
         idStream.WriteFile((packagedDir + "steam_appid.txt").c_str());
     }
 
+    if (platform == Platform::Windows)
+    {
+        // SDL2.dll, for game controllers of every kind (Input_Windows.cpp loads it if it is there)
+        std::string sdlDll = octaveDirectory + "External/SDL2/lib/win64/SDL2.dll";
+        if (SYS_DoesFileExist(sdlDll.c_str(), false))
+        {
+            SYS_CopyDirectory(sdlDll.c_str(), packagedDir.c_str());
+        }
+    }
+
     // Verify that the executable exists in the packaged directory
     if (!SYS_DoesFileExist((packagedDir + projectName + extension).c_str(), false))
     {
