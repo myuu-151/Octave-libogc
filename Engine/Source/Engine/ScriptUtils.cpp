@@ -288,21 +288,26 @@ bool ScriptUtils::RunScript(const char* fileName, Datum* ret)
     {
         LogDebug("Loading script: %s", className.c_str());
 
-        std::string luaString;
+        // Lua reads the file's own bytes: a copy of them as well needed a second block the file's
+        // size, which a fragmented console heap may not have for a big script.
+        Stream luaStream;
+        const char* luaData = nullptr;
+        size_t luaSize = 0;
 
         if (embeddedScript != nullptr)
         {
-            luaString.assign(embeddedScript->mData, embeddedScript->mSize);
+            luaData = embeddedScript->mData;
+            luaSize = embeddedScript->mSize;
         }
         else
         {
-            Stream luaStream;
             luaStream.ReadFile(fullFileName.c_str(), true);
-            luaString.assign(luaStream.GetData(), luaStream.GetSize());
+            luaData = luaStream.GetData();
+            luaSize = luaStream.GetSize();
         }
 
         std::string chunkName = "@" + className + ".lua";
-        if (luaL_loadbuffer(L, luaString.c_str(), luaString.size(), chunkName.c_str()) || lua_pcall(L, 0, LUA_MULTRET, 0))
+        if (luaL_loadbuffer(L, luaData != nullptr ? luaData : "", luaSize, chunkName.c_str()) || lua_pcall(L, 0, LUA_MULTRET, 0))
         {
             LogError("Lua Error: %s\n", lua_tostring(L, -1));
             if (sBreakOnScriptError) { OCT_ASSERT(0); }
