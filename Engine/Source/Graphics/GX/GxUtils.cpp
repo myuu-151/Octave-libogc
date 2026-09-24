@@ -18,6 +18,8 @@
 #include "Nodes/3D/SkeletalMesh3d.h"
 
 #include <malloc.h>
+#include <math.h>
+#include <algorithm>
 
 extern GxContext gGxContext;
 
@@ -775,25 +777,39 @@ void ApplyWidgetRotation(Mtx& mtx, Widget* widget)
     guMtxConcat(rotMat, srcMat, mtx);
 }
 
-// A MESH'S DISPLAY LISTS, one per batch of at most kFacesPerList triangles, each its own block.
-// It was one list for the whole mesh: 636 KB in one piece for a pipe piece of 21,000 triangles,
-// which a GameCube that has been streaming stages in and out for a while no longer has anywhere
-// (see BigBlockCache_Dolphin.cpp). In batches the biggest block is about 60 KB. The handle the
-// renderer keeps (mDisplayList, mColorDisplayList) is a MeshLists; only these three functions
-// look inside it.
+// A MESH'S DISPLAY LISTS: its faces in batches of at most kBatchFaces, each its own list in its own
+// block, with its own bounding sphere, and each sent as triangle strips.
 //
-// (GX_Begin's vertex count is a u16, so one primitive can carry at most 65535 vertices -- 21845
-// triangles. A larger mesh once went out as one GX_Begin whose count wrapped, and the GP read the
-// surplus vertex data as commands. Batches this size are well under that.)
+// Small blocks: it was one list for the whole mesh, 636 KB in one piece for a pipe piece of 21,000
+// triangles, which a GameCube that has been streaming stages in and out for a while no longer has
+// anywhere (see BigBlockCache_Dolphin.cpp).
+//
+// Bounding spheres: a batch is a run of the mesh's faces as they were made, which for a mesh built
+// along a path (a pipe, a track) is a stretch of it. CallMeshDisplayListCulled leaves out the
+// batches off screen, so a big piece half in view sends half its triangles. NOT HOOKED UP: see
+// GxUtils.h for how. (The spheres are still worked out as the lists are built; it costs little.)
+//
+// Strips: a list of separate triangles makes the GPU transform three vertices for every triangle,
+// shared or not -- it keeps no transformed vertices to reuse. In a strip each triangle after the
+// first adds ONE vertex. Measured on hardware (Sonic Pipe Dream, 2026-09-24), the frame's GPU time
+// went with the triangles sent, about 0.25 ms a thousand, with the transform unit waiting on
+// triangle setup nearly all the time it was busy. The triangles and their winding are exactly the
+// mesh's: only the order they are sent in changes.
+//
+// The handle the renderer keeps (mDisplayList, mColorDisplayList) is a MeshLists; only these
+// functions look inside it.
 namespace
 {
-    const uint32_t kListBytes = 60 * 1024;      // about this much a list
-    const uint32_t kMaxFacesPerList = 21845;    // and never more than one GX_Begin can carry
+    const uint32_t kBatchFaces = 1024;
 
     struct MeshListPart
     {
         void* mList;
         uint32_t mSize;
+        float mCenter[3];       // bounding sphere, in the mesh's own space
+        float mRadius;
+        uint16_t mVerts;        // vertices and triangles it sends, for the perf log
+        uint16_t mTris;
     };
 
     struct MeshLists
@@ -802,14 +818,196 @@ namespace
         MeshListPart mParts[1];             // mCount of them
     };
 
+    // The GPU may still be reading lists (GX_CallDispList only queues the call): see GxDeferFree.
     void FreeMeshLists(MeshLists* lists, uint32_t built)
     {
         for (uint32_t i = 0; i < built; ++i)
         {
-            free(lists->mParts[i].mList);
+            GxDeferFree(lists->mParts[i].mList);
         }
         free(lists);
     }
+
+    // ---- the stripper. Scratch for one batch, kept (static) rather than allocated per mesh, so
+    // building lists makes no temporary holes in the heap.
+    struct EdgeEntry
+    {
+        uint32_t mKey;          // the edge's two vertices, lower << 16 | higher
+        uint16_t mFace;
+    };
+
+    EdgeEntry sEdges[kBatchFaces * 3];
+    uint32_t sNumEdges = 0;
+    uint16_t sFaceMark[kBatchFaces];       // 0 free; kUsed taken; anything else: this try's walk
+    uint16_t sMarkNow = 0;
+    const uint16_t kUsed = 0xffff;
+    uint16_t sStrips[kBatchFaces * 3];     // the strips' vertices, one after another
+    uint16_t sStripLen[kBatchFaces];
+    uint16_t sSingles[kBatchFaces * 3];    // triangles no strip took, as a plain list
+    uint16_t sWalk[kBatchFaces + 2];
+    const IndexType* sFaceIdx = nullptr;   // the batch's indices, three a face
+
+    inline uint16_t FaceV(uint32_t f, uint32_t k) { return uint16_t(sFaceIdx[f * 3 + k]); }
+    inline uint32_t EdgeKey(uint16_t a, uint16_t b) { return (a < b) ? (uint32_t(a) << 16 | b) : (uint32_t(b) << 16 | a); }
+
+    // A face not yet taken (nor walked this try) that has the directed edge u -> v; its third
+    // vertex in `x`. -1 if there is none.
+    int32_t NextFace(uint16_t u, uint16_t v, uint16_t mark, uint16_t& x)
+    {
+        const uint32_t key = EdgeKey(u, v);
+        const EdgeEntry* e = std::lower_bound(sEdges, sEdges + sNumEdges, key,
+                                              [](const EdgeEntry& a, uint32_t k) { return a.mKey < k; });
+        for (; e < sEdges + sNumEdges && e->mKey == key; ++e)
+        {
+            const uint16_t f = e->mFace;
+            if (sFaceMark[f] == kUsed || sFaceMark[f] == mark)
+            {
+                continue;
+            }
+            const uint16_t a = FaceV(f, 0), b = FaceV(f, 1), c = FaceV(f, 2);
+            if (a == u && b == v) { x = c; return f; }
+            if (b == u && c == v) { x = a; return f; }
+            if (c == u && a == v) { x = b; return f; }
+        }
+        return -1;
+    }
+
+    // A strip from face f, starting at its vertex `rot`, as far as it goes; its length in vertices.
+    // Triangle k of a strip is (s[k], s[k+1], s[k+2]) for even k and (s[k+1], s[k], s[k+2]) for odd
+    // (how GX, like GL, keeps a strip's winding), and each must be its face's own winding -- so the
+    // next face must hold the directed edge s[n-2] -> s[n-1] (even) or s[n-1] -> s[n-2] (odd).
+    uint32_t Walk(uint32_t f, uint32_t rot, bool take, uint16_t* out)
+    {
+        sMarkNow = uint16_t(sMarkNow + 1);
+        if (sMarkNow == 0 || sMarkNow == kUsed)
+        {
+            // wrapped: forget old tries (the taken faces stay taken)
+            for (uint32_t i = 0; i < kBatchFaces; ++i)
+            {
+                if (sFaceMark[i] != kUsed) sFaceMark[i] = 0;
+            }
+            sMarkNow = 1;
+        }
+        const uint16_t mark = take ? kUsed : sMarkNow;
+
+        out[0] = FaceV(f, rot);
+        out[1] = FaceV(f, (rot + 1) % 3);
+        out[2] = FaceV(f, (rot + 2) % 3);
+        sFaceMark[f] = mark;
+        uint32_t n = 3;
+        for (uint32_t k = 1; ; ++k)
+        {
+            const bool even = (k & 1) == 0;
+            const uint16_t u = even ? out[n - 2] : out[n - 1];
+            const uint16_t v = even ? out[n - 1] : out[n - 2];
+            uint16_t x = 0;
+            const int32_t g = NextFace(u, v, sMarkNow, x);
+            if (g < 0)
+            {
+                break;
+            }
+            sFaceMark[g] = mark;
+            out[n++] = x;
+        }
+        return n;
+    }
+
+    struct Stripped
+    {
+        uint32_t mStrips;       // in sStripLen / sStrips
+        uint32_t mStripVerts;
+        uint32_t mSingles;      // vertices in sSingles
+        uint32_t mTris;
+    };
+
+    Stripped StripBatch(const IndexType* faceIdx, uint32_t faces)
+    {
+        sFaceIdx = faceIdx;
+        sNumEdges = 0;
+        for (uint32_t f = 0; f < faces; ++f)
+        {
+            sFaceMark[f] = 0;
+            const uint16_t a = FaceV(f, 0), b = FaceV(f, 1), c = FaceV(f, 2);
+            if (a == b || b == c || c == a)
+            {
+                sFaceMark[f] = kUsed;       // no area, nothing drawn: left out
+                continue;
+            }
+            sEdges[sNumEdges++] = { EdgeKey(a, b), uint16_t(f) };
+            sEdges[sNumEdges++] = { EdgeKey(b, c), uint16_t(f) };
+            sEdges[sNumEdges++] = { EdgeKey(c, a), uint16_t(f) };
+        }
+        std::sort(sEdges, sEdges + sNumEdges, [](const EdgeEntry& x, const EdgeEntry& y) { return x.mKey < y.mKey; });
+        sMarkNow = 0;
+
+        Stripped s = {};
+        for (uint32_t f = 0; f < faces; ++f)
+        {
+            if (sFaceMark[f] == kUsed)
+            {
+                continue;
+            }
+            // whichever corner makes the longest strip
+            uint32_t bestRot = 0, bestLen = 0;
+            for (uint32_t rot = 0; rot < 3; ++rot)
+            {
+                const uint32_t len = Walk(f, rot, false, sWalk);
+                if (len > bestLen)
+                {
+                    bestLen = len;
+                    bestRot = rot;
+                }
+            }
+            uint16_t* out = sStrips + s.mStripVerts;
+            const uint32_t len = Walk(f, bestRot, true, out);
+            s.mTris += len - 2;
+            if (len == 3)
+            {
+                // one triangle: cheaper in the plain list than as a strip of its own
+                sSingles[s.mSingles++] = out[0];
+                sSingles[s.mSingles++] = out[1];
+                sSingles[s.mSingles++] = out[2];
+                continue;
+            }
+            sStripLen[s.mStrips++] = uint16_t(len);
+            s.mStripVerts += len;
+        }
+        return s;
+    }
+
+    // ---- culling
+    bool sCullEnabled = false;
+    float sTanX = 0.0f, sTanY = 0.0f, sNearZ = 0.0f, sFarZ = 0.0f;
+    float sInvLenX = 1.0f, sInvLenY = 1.0f;
+
+    // Is a sphere (in the mesh's space) wholly outside the view? View space looks down -Z.
+    bool SphereOffscreen(const MeshListPart& p, const Mtx mv, float scale)
+    {
+        const float cx = p.mCenter[0], cy = p.mCenter[1], cz = p.mCenter[2];
+        const float x = mv[0][0] * cx + mv[0][1] * cy + mv[0][2] * cz + mv[0][3];
+        const float y = mv[1][0] * cx + mv[1][1] * cy + mv[1][2] * cz + mv[1][3];
+        const float z = mv[2][0] * cx + mv[2][1] * cy + mv[2][2] * cz + mv[2][3];
+        const float r = p.mRadius * scale;
+
+        if (z > -sNearZ + r) return true;                       // behind the near plane
+        if (-z > sFarZ + r) return true;                        // past the far one
+        if ((x + sTanX * z) * sInvLenX > r) return true;        // right
+        if ((-x + sTanX * z) * sInvLenX > r) return true;       // left
+        if ((y + sTanY * z) * sInvLenY > r) return true;        // top
+        if ((-y + sTanY * z) * sInvLenY > r) return true;       // bottom
+        return false;
+    }
+}
+
+void GxSetCullFrustum(bool enabled, float tanHalfX, float tanHalfY, float nearZ, float farZ)
+{
+    sCullEnabled = enabled && tanHalfX > 0.0f && tanHalfY > 0.0f;
+    sTanX = tanHalfX;
+    sTanY = tanHalfY;
+    sNearZ = nearZ;
+    sFarZ = farZ;
+    sInvLenX = 1.0f / sqrtf(1.0f + tanHalfX * tanHalfX);
+    sInvLenY = 1.0f / sqrtf(1.0f + tanHalfY * tanHalfY);
 }
 
 // A mesh's display lists, if it has them: a mesh that ran out of memory building them has none.
@@ -824,6 +1022,40 @@ void CallMeshDisplayList(void* displayList, uint32_t size)
     for (uint32_t i = 0; i < lists->mCount; ++i)
     {
         GX_CallDispList(lists->mParts[i].mList, lists->mParts[i].mSize);
+        GxCountDraw(lists->mParts[i].mVerts, lists->mParts[i].mTris);
+    }
+}
+
+void CallMeshDisplayListCulled(void* displayList, uint32_t size, const Mtx modelView)
+{
+    MeshLists* lists = (MeshLists*)displayList;
+    if (lists == nullptr || size == 0)
+    {
+        return;
+    }
+    if (!sCullEnabled)
+    {
+        CallMeshDisplayList(displayList, size);
+        return;
+    }
+
+    // how much the model-view matrix grows a length: its longest axis
+    float scale2 = 0.0f;
+    for (uint32_t c = 0; c < 3; ++c)
+    {
+        const float l2 = modelView[0][c] * modelView[0][c] + modelView[1][c] * modelView[1][c] + modelView[2][c] * modelView[2][c];
+        scale2 = (l2 > scale2) ? l2 : scale2;
+    }
+    const float scale = sqrtf(scale2);
+
+    for (uint32_t i = 0; i < lists->mCount; ++i)
+    {
+        const MeshListPart& part = lists->mParts[i];
+        if (!SphereOffscreen(part, modelView, scale))
+        {
+            GX_CallDispList(part.mList, part.mSize);
+            GxCountDraw(part.mVerts, part.mTris);
+        }
     }
 }
 
@@ -837,11 +1069,28 @@ void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& out
         return nullptr;
     }
 
+    // Where the positions are, for the bounds: first in every vertex format.
+    const uint8_t* posBase = nullptr;
+    uint32_t posStride = 0;
+    if (staticMesh->HasCompactVertices())
+    {
+        posBase = (const uint8_t*)staticMesh->GetColorVertices();
+        posStride = 16;                                     // x, y, z, colour
+    }
+    else if (staticMesh->HasVertexColor())
+    {
+        posBase = (const uint8_t*)staticMesh->GetColorVertices();
+        posStride = sizeof(VertexColor);
+    }
+    else
+    {
+        posBase = (const uint8_t*)staticMesh->GetVertices();
+        posStride = sizeof(Vertex);
+    }
+
     // position, normal, colour, two texture coordinates (16-bit indices each); compact: position, colour
     const uint32_t elemSize = compact ? (2 + 2) : useColor ? (2 + 2 + 2 + 2 + 2) : (2 + 2 + 2 + 2);
-    uint32_t facesPerList = kListBytes / (elemSize * 3);
-    facesPerList = (facesPerList < kMaxFacesPerList) ? facesPerList : kMaxFacesPerList;
-    const uint32_t numLists = (numFaces + facesPerList - 1) / facesPerList;
+    const uint32_t numLists = (numFaces + kBatchFaces - 1) / kBatchFaces;
     MeshLists* lists = (MeshLists*)malloc(sizeof(MeshLists) + (numLists - 1) * sizeof(MeshListPart));
     if (lists == nullptr)
     {
@@ -850,16 +1099,72 @@ void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& out
     }
     lists->mCount = numLists;
 
+    auto emit = [&](uint16_t index)
+    {
+        GX_Position1x16(index);
+        if (compact)
+        {
+            GX_Color1x16(index);
+            return;
+        }
+        GX_Normal1x16(index);
+        if (useColor)
+        {
+            GX_Color1x16(index);
+        }
+        GX_TexCoord1x16(index);
+        GX_TexCoord1x16(index);
+    };
+
     uint32_t total = 0;
 
     for (uint32_t part = 0; part < numLists; ++part)
     {
-        const uint32_t firstFace = part * facesPerList;
-        const uint32_t faces = (numFaces - firstFace < facesPerList) ? (numFaces - firstFace) : facesPerList;
+        const uint32_t firstFace = part * kBatchFaces;
+        const uint32_t faces = (numFaces - firstFace < kBatchFaces) ? (numFaces - firstFace) : kBatchFaces;
+        const IndexType* faceIdx = indices + firstFace * 3;
+        MeshListPart& out = lists->mParts[part];
 
-        uint32_t allocSize = 3 + elemSize * faces * 3;
-        allocSize = (allocSize + 0x1f) & (~0x1f);   // 32 byte aligned
-        allocSize += 64;                            // extra space to account for the pipe flush
+        // the batch's bounding sphere: the middle of its box, out to the farthest corner
+        float lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f };
+        if (posBase != nullptr)
+        {
+            for (uint32_t i = 0; i < faces * 3; ++i)
+            {
+                const float* p = (const float*)(posBase + uint32_t(faceIdx[i]) * posStride);
+                for (uint32_t k = 0; k < 3; ++k)
+                {
+                    lo[k] = (p[k] < lo[k]) ? p[k] : lo[k];
+                    hi[k] = (p[k] > hi[k]) ? p[k] : hi[k];
+                }
+            }
+            float r2 = 0.0f;
+            for (uint32_t k = 0; k < 3; ++k)
+            {
+                out.mCenter[k] = 0.5f * (lo[k] + hi[k]);
+                const float h = 0.5f * (hi[k] - lo[k]);
+                r2 += h * h;
+            }
+            out.mRadius = sqrtf(r2);
+        }
+        else
+        {
+            out.mCenter[0] = out.mCenter[1] = out.mCenter[2] = 0.0f;
+            out.mRadius = 1e30f;                            // no positions to go on: never left out
+        }
+
+        const Stripped s = StripBatch(faceIdx, faces);
+        out.mVerts = uint16_t(s.mStripVerts + s.mSingles);
+        out.mTris = uint16_t(s.mTris);
+
+        // exactly what it holds: each primitive is a command byte and a 16-bit count, then its vertices
+        uint32_t bytes = s.mStrips * 3 + s.mStripVerts * elemSize;
+        if (s.mSingles > 0)
+        {
+            bytes += 3 + s.mSingles * elemSize;
+        }
+        uint32_t allocSize = (bytes + 0x1f) & (~0x1f);  // 32 byte aligned
+        allocSize += 64;                                // extra space to account for the pipe flush
         void* displayList = memalign(32, allocSize);
 
         // Out of memory: no lists at all, and the mesh is not drawn (CallMeshDisplayList skips
@@ -874,38 +1179,50 @@ void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& out
         // This invalidate is needed because the write-gather pipe does not use the cache.
         DCInvalidateRange(displayList, allocSize);
         GX_BeginDispList(displayList, allocSize);
-        GX_Begin(GX_TRIANGLES, GX_VTXFMT0, uint16_t(faces * 3));
 
-        for (uint32_t i = firstFace; i < firstFace + faces; ++i)
+        uint32_t at = 0;
+        for (uint32_t k = 0; k < s.mStrips; ++k)
         {
-            for (uint32_t k = 0; k < 3; ++k)
+            const uint32_t len = sStripLen[k];
+            GX_Begin(GX_TRIANGLESTRIP, GX_VTXFMT0, uint16_t(len));
+            for (uint32_t i = 0; i < len; ++i)
             {
-                uint16_t index = uint16_t(indices[i * 3 + k]);
-                GX_Position1x16(index);
-                if (compact)
-                {
-                    GX_Color1x16(index);
-                    continue;
-                }
-                GX_Normal1x16(index);
-                if (useColor)
-                {
-                    GX_Color1x16(index);
-                }
-                GX_TexCoord1x16(index);
-                GX_TexCoord1x16(index);
+                emit(sStrips[at + i]);
             }
+            GX_End();
+            at += len;
+        }
+        if (s.mSingles > 0)
+        {
+            GX_Begin(GX_TRIANGLES, GX_VTXFMT0, uint16_t(s.mSingles));
+            for (uint32_t i = 0; i < s.mSingles; ++i)
+            {
+                emit(sSingles[i]);
+            }
+            GX_End();
         }
 
-        GX_End();
-        lists->mParts[part].mList = displayList;
-        lists->mParts[part].mSize = GX_EndDispList();
-        OCT_ASSERT(lists->mParts[part].mSize != 0);
-        total += lists->mParts[part].mSize;
+        out.mList = displayList;
+        out.mSize = GX_EndDispList();
+        OCT_ASSERT(out.mSize != 0);
+        total += out.mSize;
     }
 
     outSize = total;
     return lists;
+}
+
+void GxMeshListsNoCull(void* displayList)
+{
+    MeshLists* lists = (MeshLists*)displayList;
+    if (lists == nullptr)
+    {
+        return;
+    }
+    for (uint32_t i = 0; i < lists->mCount; ++i)
+    {
+        lists->mParts[i].mRadius = 1e30f;
+    }
 }
 
 void DestroyMeshDisplayList(void* displayList)

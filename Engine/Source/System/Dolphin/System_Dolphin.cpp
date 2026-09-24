@@ -16,6 +16,9 @@
 // environment (Swiss's direct-DOL loader and Dolphin mask it). So the DVD transport
 // below reads the disc by poking the DI hardware registers directly (see DiRead),
 // which links nothing from libogc and keeps the DOL apploader-bootable.
+#include <ogc/semaphore.h>
+#include <ogc/machine/processor.h>
+#include <string.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <stdlib.h>
@@ -71,6 +74,12 @@ static void InitFAT()
     }
 }
 
+// The video retrace count. This libogc has no VIDEO_GetRetraceCount; the post-retrace callback is
+// handed the count. The engine's clock steps by it and the GX renderer waits on it for its flips.
+static volatile uint32_t sRetraceCount = 0;
+static void OnRetrace(u32 retraceCount) { sRetraceCount = retraceCount; }
+uint32_t OctRetraceCount() { return sRetraceCount; }
+
 void SYS_Initialize()
 {
     EngineState& engine = *GetEngineState();
@@ -79,6 +88,7 @@ void SYS_Initialize()
     system.mFrameIndex = 0;
 
     VIDEO_Init();
+    VIDEO_SetPostRetraceCallback(OnRetrace);
     GXRModeObj* rmode = VIDEO_GetPreferredMode(&system.mGxRmode);
     engine.mWindowWidth = rmode->fbWidth;
     engine.mWindowHeight = rmode->efbHeight;
@@ -782,7 +792,73 @@ bool SYS_ReadFileRange(const char* path, bool isAsset, uint32_t offset, uint32_t
 
 // Writes a line to the local SD diagnostic log (IsoLog -> /octiso.log) from outside
 // this file, e.g. video playback stats. A no-op unless IsoLog_local.h is present.
-// Holds the ISO mutex so the log's SD writes don't interleave with streaming reads.
+//
+// The line is QUEUED, and a thread below every other (priority 10) writes it -- under the ISO mutex,
+// so the SD writes don't interleave with streaming reads. Written here, on the caller's thread, a
+// line cost the game a frame: opening, appending to and closing a file on the SD card took 50-130 ms
+// on hardware, every five seconds for the perf log, and showed as a hitch that only the log made.
+// The thread runs whenever everything else waits (the main thread waits on the GPU and the retrace
+// every frame), so lines reach the card within a frame or so; one written just before a hard crash
+// can be lost. A full queue drops lines (and says how many) rather than wait.
+#if __has_include("IsoLog_local.h")
+namespace
+{
+    const uint32_t kLogLines = 32;
+    char sLogQueue[kLogLines][512];
+    volatile uint32_t sLogHead = 0;         // next to write to the card
+    volatile uint32_t sLogTail = 0;         // next free
+    volatile uint32_t sLogDropped = 0;
+    sem_t sLogSem = LWP_SEM_NULL;
+    lwp_t sLogThread = LWP_THREAD_NULL;
+    bool sLogThreadTried = false;
+
+    void* LogThread(void*)
+    {
+        while (true)
+        {
+            LWP_SemWait(sLogSem);
+            while (sLogHead != sLogTail)
+            {
+                const uint32_t dropped = sLogDropped;
+                {
+                    SCOPED_LOCK(GetIsoMutex());
+                    if (dropped != 0)
+                    {
+                        IsoLog("(%u log lines dropped: the queue was full)", dropped);
+                    }
+                    IsoLog("%s", sLogQueue[sLogHead % kLogLines]);
+                }
+                if (dropped != 0)
+                {
+                    sLogDropped -= dropped;
+                }
+                sLogHead = sLogHead + 1;
+            }
+        }
+        return nullptr;
+    }
+
+    // 64 KB of stack: fopen/fwrite go through libfat and the SD driver (see SYS_CreateThread).
+    bool StartLogThread()
+    {
+        if (!sLogThreadTried)
+        {
+            sLogThreadTried = true;
+            if (LWP_SemInit(&sLogSem, 0, kLogLines + 1) != 0)
+            {
+                sLogSem = LWP_SEM_NULL;
+            }
+            else if (LWP_CreateThread(&sLogThread, LogThread, nullptr, nullptr, 64 * 1024, 10) != 0)
+            {
+                LWP_SemDestroy(sLogSem);
+                sLogSem = LWP_SEM_NULL;
+            }
+        }
+        return sLogSem != LWP_SEM_NULL;
+    }
+}
+#endif
+
 void OctLog(const char* format, ...)
 {
     char buffer[512];
@@ -790,6 +866,30 @@ void OctLog(const char* format, ...)
     va_start(args, format);
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
+
+#if __has_include("IsoLog_local.h")
+    if (StartLogThread())
+    {
+        u32 level;
+        _CPU_ISR_Disable(level);
+        const bool full = (sLogTail - sLogHead) >= kLogLines;
+        if (!full)
+        {
+            memcpy(sLogQueue[sLogTail % kLogLines], buffer, sizeof(buffer));
+            sLogTail = sLogTail + 1;
+        }
+        else
+        {
+            sLogDropped = sLogDropped + 1;
+        }
+        _CPU_ISR_Restore(level);
+        if (!full)
+        {
+            LWP_SemPost(sLogSem);
+        }
+        return;
+    }
+#endif
 
     SCOPED_LOCK(GetIsoMutex());
     IsoLog("%s", buffer);

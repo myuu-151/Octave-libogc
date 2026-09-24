@@ -21,6 +21,8 @@ struct System_Lua
     static int GetSaveCard(lua_State* L);
     static int GetPerfReport(lua_State* L);
     static int GetClockMs(lua_State* L);
+    static int PerfBegin(lua_State* L);
+    static int PerfEnd(lua_State* L);
 
     static int SetScreenOrientation(lua_State* L);
     static int GetScreenOrientation(lua_State* L);

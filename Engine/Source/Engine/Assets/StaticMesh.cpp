@@ -1,6 +1,7 @@
 #include "Assets/StaticMesh.h"
 #if API_GX && !EDITOR
 #include <gccore.h>
+#include <malloc.h>
 #include "System/System.h"
 #endif
 #include "Renderer.h"
@@ -661,7 +662,9 @@ bool StaticMesh::ApplyStagedColors()
         return false;
     }
     // position (12 bytes), colour (4): the colour is the last word of each 16, in GX's byte order
-    // (reversed, as GFX_CreateStaticMeshResource does for a mesh as it is loaded)
+    // (reversed, as GFX_CreateStaticMeshResource does for a mesh as it is loaded). The GPU may still
+    // be drawing the last frame with these colours: let it finish first.
+    GxWaitGpu();
     uint8_t* compact = (uint8_t*)resource->mCompactVertices;
     for (uint32_t i = 0; i < mNumVertices; ++i)
     {
@@ -712,9 +715,24 @@ bool StaticMesh::SetVertexData(const float* xyz, const uint32_t* rgba, uint32_t 
         return color;
     };
     StaticMeshResource* resource = GetResource();
+    // The vertices move, so the display lists' batch bounds no longer hold (for batch culling,
+    // GxUtils.h, if it is ever hooked up): never leave them out.
+    GxMeshListsNoCull(resource->mColorDisplayList);
+    GxMeshListsNoCull(resource->mDisplayList);
     if (resource->mCompact && resource->mCompactVertices != nullptr)
     {
-        uint8_t* compact = (uint8_t*)resource->mCompactVertices;
+        // Into the spare array, then swap: the GPU may still be drawing the last frame from the
+        // current one. (The spare was last drawn from two frames ago, which it has finished.)
+        if (resource->mCompactSpare == nullptr)
+        {
+            resource->mCompactSpare = memalign(32, count * 16);
+        }
+        uint8_t* compact = (uint8_t*)resource->mCompactSpare;
+        if (compact == nullptr)
+        {
+            GxWaitGpu();                        // no room for a second array: write this one, safely
+            compact = (uint8_t*)resource->mCompactVertices;
+        }
         for (uint32_t i = 0; i < count; ++i)
         {
             memcpy(compact + i * 16, xyz + i * 3, 12);
@@ -722,9 +740,15 @@ bool StaticMesh::SetVertexData(const float* xyz, const uint32_t* rgba, uint32_t 
             memcpy(compact + i * 16 + 12, &color, 4);
         }
         DCFlushRange(compact, count * 16);
+        if (compact == resource->mCompactSpare)
+        {
+            resource->mCompactSpare = resource->mCompactVertices;
+            resource->mCompactVertices = compact;
+        }
     }
     else if (mVertices != nullptr)
     {
+        GxWaitGpu();                            // in place: let the GPU finish the last frame first
         VertexColor* vertices = GetColorVertices();
         for (uint32_t i = 0; i < count; ++i)
         {
@@ -1215,7 +1239,11 @@ void StaticMesh::ResizeVertexArray(uint32_t newSize)
 {
     if (mVertices != nullptr)
     {
+#if API_GX && !EDITOR
+        GxDeferFree(mVertices);         // the GPU may still be reading it (GxDeferFree)
+#else
         free(mVertices);
+#endif
         mVertices = nullptr;
     }
 

@@ -16,6 +16,7 @@ static Profiler* sProfiler = nullptr;
 // seconds, the average of every frame stat over them and then the same stats for the single worst
 // frame. One line, not one a frame, because writing to the card is itself a hitch.
 #include <stdio.h>
+#include <string.h>
 #include <malloc.h>
 void OctLog(const char* format, ...);
 
@@ -27,6 +28,132 @@ static char sPerfWorst[256] = "";
 const char* GetPerfAverageLine() { return sPerfAverage; }
 const char* GetPerfWorstLine() { return sPerfWorst; }
 static const uint32_t kPerfMaxStats = 24;
+
+// ---- LUA: where the game's scripts spend the frame. Every script's Tick is timed by name
+// (Script::CallTick), and a script can time its own parts: System.PerfBegin(name) / PerfEnd().
+// Each gets, a frame: its average and worst ms, and the Lua memory it allocated and the garbage
+// collector freed while it ran (net, from the Lua heap's size before and after) -- garbage made
+// every frame is collector work later, which comes back as uneven frames. Logged with the PERF
+// lines as LUA lines. Times include what is nested inside them.
+namespace
+{
+    struct LuaPerf
+    {
+        char mName[24];
+        double mSumMs;
+        float mWorstMs;
+        float mFrameMs;             // this frame's so far
+        uint32_t mFrame;            // which frame mFrameMs is
+        double mAllocKb;
+        double mFreedKb;
+    };
+    const uint32_t kMaxLuaPerf = 24;
+    LuaPerf sLuaPerf[kMaxLuaPerf];
+    uint32_t sNumLuaPerf = 0;
+
+    struct LuaPerfOpen
+    {
+        LuaPerf* mEntry;
+        uint64_t mStartUs;
+        int64_t mStartBytes;
+    };
+    LuaPerfOpen sLuaOpen[16];
+    uint32_t sNumLuaOpen = 0;
+
+    LuaPerf* FindLuaPerf(const char* name)
+    {
+        for (uint32_t i = 0; i < sNumLuaPerf; ++i)
+        {
+            if (strncmp(sLuaPerf[i].mName, name, sizeof(sLuaPerf[i].mName) - 1) == 0)
+            {
+                return &sLuaPerf[i];
+            }
+        }
+        if (sNumLuaPerf == kMaxLuaPerf)
+        {
+            return nullptr;
+        }
+        LuaPerf* e = &sLuaPerf[sNumLuaPerf++];
+        memset(e, 0, sizeof(*e));
+        strncpy(e->mName, name, sizeof(e->mName) - 1);
+        return e;
+    }
+
+    int64_t LuaHeapBytes()
+    {
+        lua_State* L = GetLua();
+        return L ? (int64_t(lua_gc(L, LUA_GCCOUNT, 0)) * 1024 + lua_gc(L, LUA_GCCOUNTB, 0)) : 0;
+    }
+
+    void LuaPerfAdd(LuaPerf* e, uint64_t us, int64_t bytes)
+    {
+        const uint32_t frame = GetEngineState()->mFrameNumber;
+        if (e->mFrame != frame)
+        {
+            e->mWorstMs = glm::max(e->mWorstMs, e->mFrameMs);
+            e->mFrameMs = 0.0f;
+            e->mFrame = frame;
+        }
+        const float ms = us / 1000.0f;
+        e->mFrameMs += ms;
+        e->mSumMs += ms;
+        if (bytes >= 0) e->mAllocKb += bytes / 1024.0;
+        else e->mFreedKb += -bytes / 1024.0;
+    }
+
+    void LogLuaPerf(uint32_t frames)
+    {
+        if (sNumLuaPerf == 0 || frames == 0)
+        {
+            return;
+        }
+        char line[500];
+        int at = snprintf(line, sizeof(line), "LUA heap=%dK", int(LuaHeapBytes() / 1024));
+        for (uint32_t i = 0; i < sNumLuaPerf; ++i)
+        {
+            LuaPerf& e = sLuaPerf[i];
+            const float worst = glm::max(e.mWorstMs, e.mFrameMs);
+            char item[96];
+            snprintf(item, sizeof(item), " %s=%.2f/%.1fms+%.1fK-%.1fK", e.mName, e.mSumMs / frames, worst,
+                     e.mAllocKb / frames, e.mFreedKb / frames);
+            if (at + int(strlen(item)) >= int(sizeof(line)) - 1)
+            {
+                OctLog("%s", line);                         // too long for one line: go on in another
+                at = snprintf(line, sizeof(line), "LUA+");
+            }
+            at += snprintf(line + at, sizeof(line) - at, "%s", item);
+            e.mSumMs = 0.0;
+            e.mWorstMs = 0.0f;
+            e.mFrameMs = 0.0f;
+            e.mAllocKb = e.mFreedKb = 0.0;
+        }
+        OctLog("%s", line);
+    }
+}
+
+void OctLuaPerfBegin(const char* name)
+{
+    if (sNumLuaOpen < sizeof(sLuaOpen) / sizeof(sLuaOpen[0]))
+    {
+        LuaPerfOpen& o = sLuaOpen[sNumLuaOpen++];
+        o.mEntry = FindLuaPerf(name);
+        o.mStartBytes = LuaHeapBytes();
+        o.mStartUs = SYS_GetTimeMicroseconds();
+    }
+}
+
+void OctLuaPerfEnd()
+{
+    if (sNumLuaOpen > 0)
+    {
+        const uint64_t nowUs = SYS_GetTimeMicroseconds();
+        LuaPerfOpen& o = sLuaOpen[--sNumLuaOpen];
+        if (o.mEntry != nullptr)
+        {
+            LuaPerfAdd(o.mEntry, nowUs - o.mStartUs, LuaHeapBytes() - o.mStartBytes);
+        }
+    }
+}
 
 static void LogFrameStats(const std::vector<CpuStat>& stats, float deltaTime)
 {
@@ -78,6 +205,7 @@ static void LogFrameStats(const std::vector<CpuStat>& stats, float deltaTime)
         }
 
         OctLog("%s", line);
+        LogLuaPerf(sFrames);
 
         int a = snprintf(sPerfAverage, sizeof(sPerfAverage), "avg");
         int w = snprintf(sPerfWorst, sizeof(sPerfWorst), "worst %.0f:", sWorstFrame);

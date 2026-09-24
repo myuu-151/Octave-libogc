@@ -2,6 +2,7 @@
 #include "Log.h"
 #include "Engine.h"
 #include "Clock.h"
+#include "Profiler.h"
 #include "Utilities.h"
 
 #include "System/System.h"
@@ -341,6 +342,25 @@ int System_Lua::GetClockMs(lua_State* L)
     return 1;
 }
 
+// System.PerfBegin(name) ... System.PerfEnd(): time a part of a script, for the console perf log's
+// LUA lines (average and worst ms a frame, and the Lua memory made and freed meanwhile). Nest them.
+// Nothing off the consoles.
+int System_Lua::PerfBegin(lua_State* L)
+{
+#if PLATFORM_DOLPHIN && PROFILING_ENABLED
+    OctLuaPerfBegin(luaL_checkstring(L, 1));
+#endif
+    return 0;
+}
+
+int System_Lua::PerfEnd(lua_State* L)
+{
+#if PLATFORM_DOLPHIN && PROFILING_ENABLED
+    OctLuaPerfEnd();
+#endif
+    return 0;
+}
+
 int System_Lua::GetPerfReport(lua_State* L)
 {
 #if PLATFORM_DOLPHIN
@@ -377,6 +397,8 @@ void System_Lua::Bind()
     REGISTER_TABLE_FUNC(L, tableIdx, SetSaveInfo);
     REGISTER_TABLE_FUNC(L, tableIdx, GetSaveCard);
     REGISTER_TABLE_FUNC(L, tableIdx, GetPerfReport);
+    REGISTER_TABLE_FUNC(L, tableIdx, PerfBegin);
+    REGISTER_TABLE_FUNC(L, tableIdx, PerfEnd);
 
     REGISTER_TABLE_FUNC(L, tableIdx, GetClockMs);
 

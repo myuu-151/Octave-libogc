@@ -34,45 +34,50 @@
 #include <vector>
 
 #include <gccore.h>
+#include <ogc/machine/processor.h>      // _CPU_ISR_Disable / Restore
 #define DEFAULT_FIFO_SIZE    (256*1024)
 
 GxContext gGxContext;
 
 #if PROFILING_ENABLED
 // ---- GPU performance counters ---------------------------------------------------------------
-// The GP counts two things at a time (one "perf0", one "perf1" metric), so each frame measures one
-// pair and the pairs take turns. Every few seconds the per-frame average of each goes to the SD
-// diagnostic log as a GPU line: what the GPU is busy with, which the CPU stats (where "Vsync" is
-// all waiting) cannot tell. Clock counts are shown in ms of GP time; the rest as counts a frame.
-//   xfrm   the transform unit busy          xfWaitOut  transform stalled on setup/raster/pixels
-//   xfWaitIn  transform starved of vertices   txIdle / txStall  texture unit idle / waiting on memory
-//   vcStall   vertex fetch stalls              quads  2x2 pixel quads drawn (fill)
+// The GP counts one "perf0" metric at a time, so each frame measures one and they take turns.
+// Every few seconds the per-frame average of each goes to the SD diagnostic log as a GPU line:
+// what the GPU is busy with, which the CPU stats cannot tell. Clock counts are shown in ms of GP
+// time; the rest in thousands a frame.
+//   xfrm      the transform unit busy        xfWaitOut  transform stalled on setup/raster/pixels
+//   xfWaitIn  transform starved of vertices  clip       clipping      gpClocks  the whole frame
+//   tris / culled   triangles set up / back-face culled       quads  2x2 pixel quads drawn (fill)
+// (libogc's GX_ReadGPMetric never writes its second output, so the "perf1" metrics -- texels,
+// cache misses -- cannot be read through it; and PERF0_VERTICES reads 0 on hardware. What the
+// display lists send is counted on the CPU instead: GxCountDraw, the dl... figures.)
 void OctLog(const char* format, ...);
 
 namespace
 {
-    struct GpMetricPair
+    struct GpMetric
     {
         uint32_t mPerf0;
-        uint32_t mPerf1;
-        const char* mName0;
-        const char* mName1;
-        bool mClocks0;      // a count of GP clocks (shown in ms)
-        bool mClocks1;
+        const char* mName;
+        bool mClocks;       // a count of GP clocks (shown in ms)
     };
 
-    const GpMetricPair kGpPairs[] =
+    const GpMetric kGpMetrics[] =
     {
-        { GX_PERF0_XF_XFRM_CLKS,    GX_PERF1_TX_IDLE,        "xfrm",      "txIdle",   true,  true  },
-        { GX_PERF0_XF_WAIT_OUT,     GX_PERF1_TX_MEMSTALL,    "xfWaitOut", "txStall",  true,  true  },
-        { GX_PERF0_XF_WAIT_IN,      GX_PERF1_VC_ALL_STALLS,  "xfWaitIn",  "vcStall",  true,  true  },
-        { GX_PERF0_CLIP_CLKS,       GX_PERF1_CLOCKS,         "clip",      "gpClocks", true,  true  },
-        { GX_PERF0_VERTICES,        GX_PERF1_TEXELS,         "verts",     "texels",   false, false },
-        { GX_PERF0_TRIANGLES,       GX_PERF1_TC_MISS,        "tris",      "tcMiss",   false, false },
-        { GX_PERF0_TRIANGLES_CULLED, GX_PERF1_VC_MISS_REQ,   "culled",    "vcMiss",   false, false },
-        { GX_PERF0_QUAD_NON0CVG,    GX_PERF1_CALL_REQ,       "quads",     "dlLines",  false, false },
+        { GX_PERF0_XF_XFRM_CLKS,     "xfrm",      true  },
+        { GX_PERF0_XF_WAIT_OUT,      "xfWaitOut", true  },
+        { GX_PERF0_XF_WAIT_IN,       "xfWaitIn",  true  },
+        { GX_PERF0_CLIP_CLKS,        "clip",      true  },
+        { GX_PERF0_CLOCKS,           "gpClocks",  true  },
+        { GX_PERF0_TRIANGLES,        "tris",      false },
+        { GX_PERF0_TRIANGLES_CULLED, "culled",    false },
+        { GX_PERF0_QUAD_NON0CVG,     "quads",     false },
     };
-    const uint32_t kNumGpPairs = sizeof(kGpPairs) / sizeof(kGpPairs[0]);
+    const uint32_t kNumGpMetrics = sizeof(kGpMetrics) / sizeof(kGpMetrics[0]);
+
+    // What the display lists sent, this log period.
+    uint64_t sDlVerts = 0, sDlTris = 0;
+    uint32_t sDlBatches = 0, sDlFrames = 0;
 
     // GP clocks per millisecond: 162 MHz on the GameCube, 243 MHz on the Wii.
 #if PLATFORM_GAMECUBE
@@ -81,30 +86,29 @@ namespace
     const double kGpClocksPerMs = 243000.0;
 #endif
 
-    double sGpSum[kNumGpPairs][2] = {};
-    uint32_t sGpFrames[kNumGpPairs] = {};
-    uint32_t sGpPair = 0;
-    bool sGpArmed = false;          // counters set up and cleared for this frame
+    double sGpSum[kNumGpMetrics] = {};
+    uint32_t sGpFrames[kNumGpMetrics] = {};
+    uint32_t sGpMetric = 0;
+    bool sGpArmed = false;          // a counter chosen and cleared for the frame being drawn
     uint64_t sGpPeriodStartUs = 0;
 
-    void GpMetricsBeginFrame()
+    // At the start of a frame, with the GPU idle: choose this frame's counter and clear it. The
+    // choice goes through the FIFO and the clear straight to the register, but with the GPU idle
+    // nothing is counted between them either way.
+    void GpMetricsArm()
     {
         if (sGpPeriodStartUs == 0)
         {
-            // The first frame: choose the first pair. The commands go through the FIFO, so they
-            // take effect by the next frame; counting starts then.
-            GX_SetGPMetric(kGpPairs[sGpPair].mPerf0, kGpPairs[sGpPair].mPerf1);
-            GX_Flush();
             sGpPeriodStartUs = SYS_GetTimeMicroseconds();
-            return;
         }
-
+        GX_SetGPMetric(kGpMetrics[sGpMetric].mPerf0, GX_PERF1_NONE);
+        GX_Flush();
         GX_ClearGPMetric();
         sGpArmed = true;
     }
 
-    // After GX_DrawDone: the GPU has finished the frame, so the counts are complete.
-    void GpMetricsEndFrame()
+    // Once the GPU has finished a frame: its count is complete.
+    void GpMetricsFrameDone()
     {
         if (!sGpArmed)
         {
@@ -114,14 +118,10 @@ namespace
 
         u32 c0 = 0, c1 = 0;
         GX_ReadGPMetric(&c0, &c1);
-        sGpSum[sGpPair][0] += c0;
-        sGpSum[sGpPair][1] += c1;
-        sGpFrames[sGpPair]++;
-
-        // The next pair, for the next frame.
-        sGpPair = (sGpPair + 1) % kNumGpPairs;
-        GX_SetGPMetric(kGpPairs[sGpPair].mPerf0, kGpPairs[sGpPair].mPerf1);
-        GX_Flush();
+        sGpSum[sGpMetric] += c0;
+        sGpFrames[sGpMetric]++;
+        sGpMetric = (sGpMetric + 1) % kNumGpMetrics;
+        sDlFrames++;
 
         const uint64_t nowUs = SYS_GetTimeMicroseconds();
         if (nowUs - sGpPeriodStartUs < 5000000)
@@ -132,27 +132,96 @@ namespace
 
         char line[500];
         int at = snprintf(line, sizeof(line), "GPU");
-        for (uint32_t p = 0; p < kNumGpPairs; ++p)
+        for (uint32_t m = 0; m < kNumGpMetrics; ++m)
         {
-            for (uint32_t k = 0; k < 2; ++k)
+            const double avg = sGpFrames[m] ? sGpSum[m] / sGpFrames[m] : 0.0;
+            if (at < int(sizeof(line)) - 32)
             {
-                const GpMetricPair& pair = kGpPairs[p];
-                const char* name = k ? pair.mName1 : pair.mName0;
-                const bool clocks = k ? pair.mClocks1 : pair.mClocks0;
-                const double avg = sGpFrames[p] ? sGpSum[p][k] / sGpFrames[p] : 0.0;
-                if (at < int(sizeof(line)) - 32)
-                {
-                    at += clocks ? snprintf(line + at, sizeof(line) - at, " %s=%.1fms", name, avg / kGpClocksPerMs)
-                                 : snprintf(line + at, sizeof(line) - at, " %s=%.0fK", name, avg / 1000.0);
-                }
-                sGpSum[p][k] = 0.0;
+                at += kGpMetrics[m].mClocks ? snprintf(line + at, sizeof(line) - at, " %s=%.1fms", kGpMetrics[m].mName, avg / kGpClocksPerMs)
+                                            : snprintf(line + at, sizeof(line) - at, " %s=%.1fK", kGpMetrics[m].mName, avg / 1000.0);
             }
-            sGpFrames[p] = 0;
+            sGpSum[m] = 0.0;
+            sGpFrames[m] = 0;
         }
+        if (sDlFrames > 0 && at < int(sizeof(line)) - 80)
+        {
+            const float n = float(sDlFrames);
+            snprintf(line + at, sizeof(line) - at, " dlVerts=%.1fK dlTris=%.1fK batches=%.0f",
+                     sDlVerts / n / 1000.0f, sDlTris / n / 1000.0f, sDlBatches / n);
+        }
+        sDlVerts = sDlTris = 0;
+        sDlBatches = sDlFrames = 0;
         OctLog("%s", line);
     }
 }
+
+void GxCountDraw(uint32_t verts, uint32_t tris)
+{
+    sDlVerts += verts;
+    sDlTris += tris;
+    sDlBatches++;
+}
+#else
+void GxCountDraw(uint32_t, uint32_t) {}
 #endif
+
+// ---- CPU and GPU at once ---------------------------------------------------------------------
+// A frame ends by queueing its copy to the screen and a draw-done token, and does NOT wait for
+// the GPU: the next frame's game logic runs while the GPU draws this one. The next frame waits
+// for it when it starts to draw (GFX_BeginFrame), and only then shows it. Before, the CPU did its
+// ~10 ms of logic with the GPU idle and then waited out the GPU's frame: one after the other.
+//
+// So until then the GPU may still be reading anything the frame used. Display lists, vertex
+// arrays and textures freed meanwhile are not freed at once but handed to GxDeferFree, and freed
+// once the GPU is done with the frame. (A display list freed under the GPU is the dangerous one:
+// free() writes its bookkeeping into the first bytes, which the GPU would then run as commands.)
+// Anything that rewrites memory in place that the GPU reads calls GxWaitGpu first.
+namespace
+{
+    bool sFrameInFlight = false;            // a frame's draw-done token queued and not yet waited for
+    bool sFlipPending = false;              // a frame handed to the video interface, and the retrace
+    uint32_t sFlipRetrace = 0;              // count then: it is on screen once the count moves on
+
+    const uint32_t kMaxDeferred = 512;
+    void* sDeferred[kMaxDeferred];
+    uint32_t sNumDeferred = 0;
+
+    void FreeDeferred()
+    {
+        for (uint32_t i = 0; i < sNumDeferred; ++i)
+        {
+            free(sDeferred[i]);
+        }
+        sNumDeferred = 0;
+    }
+}
+
+uint32_t OctRetraceCount();     // System_Dolphin.cpp
+
+void GxWaitGpu()
+{
+    // Everything queued so far, this frame's commands included.
+    GX_DrawDone();
+    sFrameInFlight = false;
+#if PROFILING_ENABLED
+    GpMetricsFrameDone();
+#endif
+    FreeDeferred();
+}
+
+void GxDeferFree(void* block)
+{
+    if (block == nullptr)
+    {
+        return;
+    }
+
+    if (sNumDeferred == kMaxDeferred)
+    {
+        GxWaitGpu();
+    }
+    sDeferred[sNumDeferred++] = block;
+}
 
 void GFX_Initialize()
 {
@@ -216,8 +285,34 @@ void GFX_Shutdown()
 
 void GFX_BeginFrame()
 {
+    SystemState* systemState = &GetEngineState()->mSystem;
+
+    if (sFrameInFlight)
+    {
+        {
+            // How long the CPU waits for the GPU to finish the last frame, after its own work on this one.
+            SCOPED_FRAME_STAT("GpuWait");
+            GX_WaitDrawDone();
+        }
+        sFrameInFlight = false;
 #if PROFILING_ENABLED
-    GpMetricsBeginFrame();
+        GpMetricsFrameDone();
+#endif
+        FreeDeferred();
+
+        // Show it. The video interface takes the new framebuffer at the next retrace, so note the
+        // count now (with interrupts off, so a retrace cannot fall between the two).
+        u32 level;
+        _CPU_ISR_Disable(level);
+        VIDEO_SetNextFramebuffer(systemState->mFrameBuffers[systemState->mFrameIndex]);
+        VIDEO_Flush();
+        sFlipRetrace = OctRetraceCount();
+        _CPU_ISR_Restore(level);
+        sFlipPending = true;
+    }
+
+#if PROFILING_ENABLED
+    GpMetricsArm();
 #endif
 
     gGxContext.mWorld = Renderer::Get()->GetCurrentWorld();
@@ -275,23 +370,26 @@ void GFX_EndFrame()
     GX_SetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
     GX_SetColorUpdate(GX_TRUE);
     GX_SetAlphaUpdate(GX_TRUE);
-    GX_CopyDisp(systemState->mFrameBuffers[systemState->mFrameIndex], GX_TRUE);
-    {
-        // How long the CPU waits for the GPU to finish the frame, apart from the wait for the retrace.
-        SCOPED_FRAME_STAT("GpuWait");
-        GX_DrawDone();
-    }
 
-#if PROFILING_ENABLED
-    GpMetricsEndFrame();
-#endif
-
-    VIDEO_SetNextFramebuffer(systemState->mFrameBuffers[systemState->mFrameIndex]);
-    VIDEO_Flush();
+    // This frame is copied into the framebuffer the last one replaced on screen: wait until it
+    // really has (a retrace since it was handed over), or the copy would tear what is showing.
+    // This is also what holds the game to one frame a retrace at most.
+    if (sFlipPending)
     {
         SCOPED_FRAME_STAT("RetraceWait");
-        VIDEO_WaitVSync();
+        while (OctRetraceCount() == sFlipRetrace)
+        {
+            VIDEO_WaitVSync();
+        }
+        sFlipPending = false;
     }
+
+    GX_CopyDisp(systemState->mFrameBuffers[systemState->mFrameIndex], GX_TRUE);
+
+    // Queue the token and go on without waiting: the next frame's logic runs while the GPU draws
+    // this one. GFX_BeginFrame waits for it, and shows it.
+    GX_SetDrawDone();
+    sFrameInFlight = true;
 }
 
 void GFX_BeginScreen(uint32_t screenIndex)
@@ -624,7 +722,7 @@ void GFX_DestroyTextureResource(Texture* texture)
         {
             if (*buffer != nullptr)
             {
-                SYS_AlignedFree(*buffer);
+                GxDeferFree(*buffer);           // the GPU may still be sampling it (GxDeferFree)
                 *buffer = nullptr;
             }
         }
@@ -640,7 +738,7 @@ void GFX_DestroyTextureResource(Texture* texture)
 
     if (resource->mTplData != nullptr)
     {
-        SYS_AlignedFree(resource->mTplData);
+        GxDeferFree(resource->mTplData);        // the GPU may still be sampling it (GxDeferFree)
         resource->mTplData = nullptr;
     }
 
@@ -654,6 +752,9 @@ void GFX_UpdateTextureResourcePixels(Texture* texture, const uint8_t* rgba8)
     {
         return;
     }
+
+    // In place: the GPU may still be drawing the last frame with these texels.
+    GxWaitGpu();
 
     // GX_TF_RGBA8 stores texels in 4x4 blocks: 16 (A,R) byte pairs, then 16 (G,B)
     // pairs. Texels past the right/bottom edge repeat the edge pixel.
@@ -703,6 +804,10 @@ void GFX_SetTextureResourceData(Texture* texture, uint8_t* const* planes)
     {
         return;
     }
+
+    // The planes it pointed at go back to their owner (a video's decoder, to be refilled) once this
+    // returns, and the GPU may still be drawing the last frame from them.
+    GxWaitGpu();
 
     const uint32_t width = texture->GetWidth();
     const uint32_t height = texture->GetHeight();
@@ -839,8 +944,13 @@ void GFX_DestroyStaticMeshResource(StaticMesh* staticMesh)
 
     if (resource->mCompactVertices != nullptr)
     {
-        free(resource->mCompactVertices);
+        GxDeferFree(resource->mCompactVertices);    // the GPU may still be reading it (GxDeferFree)
         resource->mCompactVertices = nullptr;
+    }
+    if (resource->mCompactSpare != nullptr)
+    {
+        GxDeferFree(resource->mCompactSpare);
+        resource->mCompactSpare = nullptr;
     }
     resource->mCompact = false;
 }

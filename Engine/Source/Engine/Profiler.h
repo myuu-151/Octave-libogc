@@ -10,6 +10,12 @@
 #define STAT_NAME_LENGTH 31
 #define STAT_NAME_BUFFER_LENGTH (STAT_NAME_LENGTH + 1)
 
+#if PLATFORM_DOLPHIN && PROFILING_ENABLED
+// Script time and Lua memory for the console perf log's LUA lines (Profiler.cpp). Nest them.
+void OctLuaPerfBegin(const char* name);
+void OctLuaPerfEnd();
+#endif
+
 struct CpuStat
 {
     char mName[STAT_NAME_BUFFER_LENGTH] = {};

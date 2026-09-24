@@ -1,4 +1,5 @@
 #include "Script.h"
+#include "Profiler.h"
 #include "Nodes/3D/Primitive3d.h"
 #include "Nodes/3D/SkeletalMesh3d.h"
 #include "Constants.h"
@@ -1956,7 +1957,13 @@ void Script::CallTick(float deltaTime)
             // Func at -3
             // Instance table (as arg0) at -2
             // deltaTime as (arg1) at -1
+#if PLATFORM_DOLPHIN && PROFILING_ENABLED
+            OctLuaPerfBegin(mClassName.c_str());        // the LUA perf lines (Profiler.cpp)
             LuaFuncCall(2);
+            OctLuaPerfEnd();
+#else
+            LuaFuncCall(2);
+#endif
         }
         else
         {

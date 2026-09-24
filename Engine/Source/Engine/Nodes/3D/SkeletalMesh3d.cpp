@@ -8,6 +8,9 @@
 #include "Utilities.h"
 
 #include "Graphics/Graphics.h"
+#if API_GX
+#include "Graphics/GX/GxUtils.h"
+#endif
 
 static const char* sBoneInfluenceModeStrings[] =
 {
@@ -1190,6 +1193,11 @@ void SkeletalMesh3D::CpuSkinVertices()
     SkeletalMesh* mesh = mSkeletalMesh.Get<SkeletalMesh>();
     if (mesh != nullptr)
     {
+#if API_GX && !EDITOR
+        // The GX renderer draws these vertices straight from this array, and the GPU may still be
+        // drawing the last frame with them: let it finish before they are rewritten.
+        GxWaitGpu();
+#endif
         mSkinnedVertices.resize(mesh->GetNumVertices());
         const std::vector<VertexSkinned>& verts = mesh->GetVertices();
 

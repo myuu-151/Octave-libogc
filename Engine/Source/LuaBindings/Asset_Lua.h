@@ -31,6 +31,7 @@ struct Asset_Lua
     static int IsTransient(lua_State* L);
 
     static int IsLoaded(lua_State* L);
+    static int Release(lua_State* L);
 
     static void BindCommon(lua_State* L, int mtIndex);
     static void Bind();

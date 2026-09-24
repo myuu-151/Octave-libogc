@@ -3,6 +3,7 @@
 #include "AssetManager.h"
 #if API_GX
 #include <gccore.h>
+#include "Graphics/GX/GxUtils.h"
 #endif
 #include "Assets/CmprEncoder.h"
 #include "Renderer.h"
@@ -577,6 +578,8 @@ int32_t Texture::ReloadPart(const std::string& assetName, uint32_t at, uint32_t 
     }
 
     // Straight into the buffer, 32 KB at a time (each read bounces through a buffer of that size).
+    // The GPU may still be drawing the last frame with these texels: let it finish first.
+    GxWaitGpu();
     const uint32_t kPiece = 32 * 1024;
     uint32_t stop = (maxBytes >= size - at) ? size : at + maxBytes;
     char* dst = (char*)resource->mTplData;

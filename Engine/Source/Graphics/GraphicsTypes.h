@@ -165,6 +165,9 @@ struct StaticMeshResource
     // COMPACT (GFX_SetCompactUnlitMeshes): position and colour only, 16 bytes a vertex, and the
     // mesh's full-size arrays let go. mColorDisplayList then indexes into this.
     void* mCompactVertices = nullptr;
+    // A mesh rewritten every frame (StaticMesh::SetVertexData) writes the next frame's vertices into
+    // this and swaps: the GPU may still be drawing the last frame from the other.
+    void* mCompactSpare = nullptr;
     bool mCompact = false;
 #elif API_C3D
     void* mVertexData = nullptr;

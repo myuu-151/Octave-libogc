@@ -38,6 +38,19 @@ int Asset_Lua::Destroy(lua_State* L)
     return 0;
 }
 
+// asset:Release(): let go of the asset NOW, instead of when Lua's collector gets round to this
+// handle. The engine frees an asset once nothing refers to it (RefSweep), and a handle dropped in a
+// script goes on referring to it until the collector has run -- so a script that streams assets
+// (a sky's frames) had to run a full collection to be rid of them, which on a GameCube takes up to
+// tens of milliseconds at a time. The handle refers to nothing after this; don't use it again.
+int Asset_Lua::Release(lua_State* L)
+{
+    CHECK_ASSET_USERDATA(L, 1);
+    Asset_Lua* assetLua = (Asset_Lua*)lua_touserdata(L, 1);
+    assetLua->mAsset = static_cast<const Asset*>(nullptr);     // (also drops a load still in flight)
+    return 0;
+}
+
 int Asset_Lua::Equals(lua_State* L)
 {
     Asset* assetA = CHECK_ASSET(L, 1);
@@ -149,6 +162,8 @@ void Asset_Lua::Bind()
     REGISTER_TABLE_FUNC(L, mtIndex, IsTransient);
 
     REGISTER_TABLE_FUNC(L, mtIndex, IsLoaded);
+
+    REGISTER_TABLE_FUNC(L, mtIndex, Release);
 
     lua_pop(L, 1);
     OCT_ASSERT(lua_gettop(L) == 0);

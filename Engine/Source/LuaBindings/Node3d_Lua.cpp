@@ -186,6 +186,24 @@ int Node3D_Lua::SetWorldPosition(lua_State* L)
     return 0;
 }
 
+// node:SetWorldPositionXYZ(x, y, z) / node:SetScaleXYZ(x, y, z): the same as SetWorldPosition(Vec(...))
+// and SetScale(Vec(...)), from three numbers. A Vec is a new object to collect, and a script that
+// moves dozens of nodes every frame (effects) made hundreds of them a frame -- garbage the console
+// then paid for in uneven frames.
+int Node3D_Lua::SetWorldPositionXYZ(lua_State* L)
+{
+    Node3D* comp = CHECK_NODE_3D(L, 1);
+    comp->SetWorldPosition(glm::vec3(float(luaL_checknumber(L, 2)), float(luaL_checknumber(L, 3)), float(luaL_checknumber(L, 4))));
+    return 0;
+}
+
+int Node3D_Lua::SetScaleXYZ(lua_State* L)
+{
+    Node3D* comp = CHECK_NODE_3D(L, 1);
+    comp->SetScale(glm::vec3(float(luaL_checknumber(L, 2)), float(luaL_checknumber(L, 3)), float(luaL_checknumber(L, 4))));
+    return 0;
+}
+
 int Node3D_Lua::SetWorldRotationEuler(lua_State* L)
 {
     Node3D* comp = CHECK_NODE_3D(L, 1);
@@ -372,6 +390,8 @@ void Node3D_Lua::Bind()
     REGISTER_TABLE_FUNC_EX(L, mtIndex, GetWorldScale, "GetAbsoluteScale");
 
     REGISTER_TABLE_FUNC(L, mtIndex, SetWorldPosition);
+    REGISTER_TABLE_FUNC(L, mtIndex, SetWorldPositionXYZ);
+    REGISTER_TABLE_FUNC(L, mtIndex, SetScaleXYZ);
     REGISTER_TABLE_FUNC_EX(L, mtIndex, SetWorldPosition, "SetAbsolutePosition");
 
     REGISTER_TABLE_FUNC(L, mtIndex, SetWorldRotationEuler);
