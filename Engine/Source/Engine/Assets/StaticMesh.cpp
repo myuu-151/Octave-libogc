@@ -590,8 +590,14 @@ int32_t StaticMesh::StageColorsFrom(const std::string& assetName, uint32_t at, u
         }
         mStagedFrom = assetName;
         mStagedDataAt = stream.GetPos();
-        mStagedColors.clear();
-        mStagedColors.resize(mNumVertices);
+        // Allocated the first time only, and kept (ApplyStagedColors does not free it): a block of
+        // this size taken while the game is being drawn made the whole picture flash with garbage
+        // for as long as it was held. So a game asks once, maxVertices 0, while nothing is drawn --
+        // a loading screen -- and every change of colours after that reuses the same memory.
+        if (mStagedColors.size() != mNumVertices)
+        {
+            mStagedColors.resize(mNumVertices);
+        }
     }
 
     outTotal = mNumVertices;
@@ -603,7 +609,10 @@ int32_t StaticMesh::StageColorsFrom(const std::string& assetName, uint32_t at, u
     // A vertex on the disc: position, two texture coordinates, normal, colour -- 44 bytes.
     const uint32_t kVertexBytes = 44;
     const uint32_t kMost = (32 * 1024) / kVertexBytes;
-    static char sPiece[kMost * kVertexBytes];
+    // 32-byte aligned, as the texture refills' buffers are. Unaligned, it shared cache lines with
+    // whatever the linker put beside it, and while colours were being read in (a marathon's hold)
+    // the whole 3D picture flashed with garbage, frame after frame. Aligned, not once.
+    static char sPiece[kMost * kVertexBytes] __attribute__((aligned(32)));
     uint32_t colorScale = GetEngineConfig()->mColorScale;
     uint32_t shiftCount = (colorScale != 1) ? (colorScale >> 1) : 0;
     uint32_t stop = (maxVertices >= mNumVertices - at) ? mNumVertices : at + maxVertices;
@@ -646,7 +655,8 @@ bool StaticMesh::ApplyStagedColors()
 {
 #if API_GX && !EDITOR
     StaticMeshResource* resource = GetResource();
-    if (mStagedColors.size() != mNumVertices || !resource->mCompact || resource->mCompactVertices == nullptr)
+    if (mStagedFrom.empty() || mStagedColors.size() != mNumVertices || !resource->mCompact ||
+        resource->mCompactVertices == nullptr)
     {
         return false;
     }
@@ -661,8 +671,7 @@ bool StaticMesh::ApplyStagedColors()
     }
     DCFlushRange(compact, mNumVertices * 16);
     GX_InvVtxCache();
-    std::vector<uint32_t>().swap(mStagedColors);
-    mStagedFrom.clear();
+    mStagedFrom.clear();                // (the buffer is kept for the next time: see StageColorsFrom)
     return true;
 #else
     return false;

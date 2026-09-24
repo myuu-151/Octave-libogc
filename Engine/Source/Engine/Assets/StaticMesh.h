@@ -75,7 +75,8 @@ public:
     // Console only (GX), for a COMPACT mesh: take another mesh asset's vertex colours -- the same
     // mesh painted differently, same vertices in the same order -- without loading it. Staged a
     // piece at a time (up to maxVertices from vertex `at`; returns the next vertex, outTotal when
-    // done, or -1), then applied all at once, so the change shows in one frame.
+    // done, or -1), then applied all at once, so the change shows in one frame. Call it once with
+    // maxVertices 0 while nothing is being drawn: that allocates the staging buffer, kept after.
     int32_t StageColorsFrom(const std::string& assetName, uint32_t at, uint32_t maxVertices, uint32_t& outTotal);
     bool ApplyStagedColors();
     uint32_t GetVertexSize() const;
