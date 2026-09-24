@@ -488,84 +488,119 @@ TextureResource* Texture::GetResource()
 // buffer that is already there. The asset keeps its own name; only its picture changes.
 bool Texture::ReloadFrom(const std::string& assetName)
 {
+    // All of it at once: straight into the buffer, 32 KB at a time.
+    uint32_t total = 0;
+    int32_t at = 0;
+    do
+    {
+        at = ReloadPart(assetName, (uint32_t)at, 32 * 1024, total);
+    } while (at >= 0 && (uint32_t)at < total);
+    return at >= 0;
+}
+
+// ReloadFrom a piece at a time: `maxBytes` of the texels from byte `at`, so that refilling a big
+// texture is spread over many frames (a marathon's change of sky, while it is being played). The
+// texture shows a mix of the two pictures until the last piece is in: refill one that is not on
+// the screen. Returns where the next piece starts (outTotal when done), or -1.
+int32_t Texture::ReloadPart(const std::string& assetName, uint32_t at, uint32_t maxBytes, uint32_t& outTotal)
+{
+    outTotal = 0;
 #if API_GX && !EDITOR
     TextureResource* resource = GetResource();
     AssetStub* stub = AssetManager::Get()->GetAssetStub(assetName);
     if (!IsLoaded() || IsDynamic() || resource->mTplData == nullptr || stub == nullptr || stub->mPath.empty())
     {
-        return false;
+        return -1;
     }
 
-    // The header: where the texels begin, and how many there are. It is well under 256 bytes.
-    char head[256];
-    if (!SYS_ReadFileRange(stub->mPath.c_str(), true, 0, sizeof(head), head))
+    if (at == 0 || mReloadSource != assetName)
     {
-        return false;
+        // The header: where the texels begin, and how many there are. It is well under 256 bytes.
+        char head[256];
+        if (!SYS_ReadFileRange(stub->mPath.c_str(), true, 0, sizeof(head), head))
+        {
+            return -1;
+        }
+
+        Stream stream(head, sizeof(head));
+        AssetHeader header = Asset::ReadHeader(stream);
+        if (header.mType != GetType())
+        {
+            return -1;
+        }
+        stream.SetAssetVersion(header.mVersion);
+        std::string name;
+        stream.ReadString(name);
+
+        uint32_t width = stream.ReadUint32();
+        uint32_t height = stream.ReadUint32();
+        uint32_t mips = stream.ReadUint32();
+        stream.ReadUint32();                                // layers
+        PixelFormat format = (PixelFormat)stream.ReadUint32();
+        stream.ReadUint32();                                // filter
+        stream.ReadUint32();                                // wrap
+        stream.ReadBool();                                  // mipmapped
+        stream.ReadBool();                                  // render target
+        stream.ReadBool();                                  // sRGB
+        if (header.mVersion >= ASSET_VERSION_TEXTURE_LOW_QUALITY)
+        {
+            stream.ReadBool();
+            stream.ReadUint8();
+        }
+        if (header.mVersion >= ASSET_VERSION_TEXTURE_COOKED_PROPERTIES)
+        {
+            width = stream.ReadUint32();
+            height = stream.ReadUint32();
+            mips = stream.ReadUint32();
+            stream.ReadUint32();                            // filter
+        }
+        uint32_t size = stream.ReadUint32();
+        uint32_t offset = stream.GetPos();
+
+        if (width != mWidth || height != mHeight || mips != mMipLevels || format != mFormat ||
+            size != resource->mTplSize || offset >= sizeof(head))
+        {
+            LogWarning("Texture %s: cannot take %s's texels in place (a different size or format)",
+                       GetName().c_str(), assetName.c_str());
+            mReloadSource.clear();
+            return -1;
+        }
+        mReloadSource = assetName;
+        mReloadOffset = offset;
     }
 
-    Stream stream(head, sizeof(head));
-    AssetHeader header = Asset::ReadHeader(stream);
-    if (header.mType != GetType())
+    uint32_t size = resource->mTplSize;
+    outTotal = size;
+    if (at >= size)
     {
-        return false;
-    }
-    stream.SetAssetVersion(header.mVersion);
-    std::string name;
-    stream.ReadString(name);
-
-    uint32_t width = stream.ReadUint32();
-    uint32_t height = stream.ReadUint32();
-    uint32_t mips = stream.ReadUint32();
-    stream.ReadUint32();                                // layers
-    PixelFormat format = (PixelFormat)stream.ReadUint32();
-    stream.ReadUint32();                                // filter
-    stream.ReadUint32();                                // wrap
-    stream.ReadBool();                                  // mipmapped
-    stream.ReadBool();                                  // render target
-    stream.ReadBool();                                  // sRGB
-    if (header.mVersion >= ASSET_VERSION_TEXTURE_LOW_QUALITY)
-    {
-        stream.ReadBool();
-        stream.ReadUint8();
-    }
-    if (header.mVersion >= ASSET_VERSION_TEXTURE_COOKED_PROPERTIES)
-    {
-        width = stream.ReadUint32();
-        height = stream.ReadUint32();
-        mips = stream.ReadUint32();
-        stream.ReadUint32();                            // filter
-    }
-    uint32_t size = stream.ReadUint32();
-    uint32_t offset = stream.GetPos();
-
-    if (width != mWidth || height != mHeight || mips != mMipLevels || format != mFormat ||
-        size != resource->mTplSize || offset >= sizeof(head))
-    {
-        LogWarning("Texture %s: cannot take %s's texels in place (a different size or format)",
-                   GetName().c_str(), assetName.c_str());
-        return false;
+        return (int32_t)size;
     }
 
     // Straight into the buffer, 32 KB at a time (each read bounces through a buffer of that size).
     const uint32_t kPiece = 32 * 1024;
+    uint32_t stop = (maxBytes >= size - at) ? size : at + maxBytes;
     char* dst = (char*)resource->mTplData;
-    for (uint32_t at = 0; at < size; at += kPiece)
+    for (uint32_t from = at; from < stop; from += kPiece)
     {
-        uint32_t n = (size - at < kPiece) ? (size - at) : kPiece;
-        if (!SYS_ReadFileRange(stub->mPath.c_str(), true, offset + at, n, dst + at))
+        uint32_t n = (stop - from < kPiece) ? (stop - from) : kPiece;
+        if (!SYS_ReadFileRange(stub->mPath.c_str(), true, mReloadOffset + from, n, dst + from))
         {
             LogError("Texture %s: reading %s failed part way; the picture is mixed", GetName().c_str(),
                      assetName.c_str());
-            return false;
+            return -1;
         }
     }
 
-    DCFlushRange(resource->mTplData, size);
-    GX_InvalidateTexAll();
-    return true;
+    DCFlushRange(dst + at, stop - at);
+    if (stop >= size)
+    {
+        GX_InvalidateTexAll();
+        mReloadSource.clear();
+    }
+    return (int32_t)stop;
 #else
-    (void)assetName;
-    return false;
+    (void)assetName; (void)at; (void)maxBytes;
+    return -1;
 #endif
 }
 

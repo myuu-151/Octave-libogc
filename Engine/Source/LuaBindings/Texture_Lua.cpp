@@ -34,6 +34,22 @@ int Texture_Lua::ReloadFrom(lua_State* L)
     return 1;
 }
 
+// texture:ReloadPart(name, at, maxBytes) -> next, total: see Texture::ReloadPart. next is -1 when
+// it cannot (not a GameCube, or a different size or format).
+int Texture_Lua::ReloadPart(lua_State* L)
+{
+    Texture* texture = CHECK_TEXTURE(L, 1);
+    const char* name = CHECK_STRING(L, 2);
+    uint32_t at = (uint32_t)CHECK_INTEGER(L, 3);
+    uint32_t maxBytes = (uint32_t)CHECK_INTEGER(L, 4);
+
+    uint32_t total = 0;
+    int32_t next = texture->ReloadPart(name, at, maxBytes, total);
+    lua_pushinteger(L, next);
+    lua_pushinteger(L, total);
+    return 2;
+}
+
 int Texture_Lua::GetWidth(lua_State* L)
 {
     Texture* texture = CHECK_TEXTURE(L, 1);
@@ -119,6 +135,8 @@ void Texture_Lua::Bind()
     REGISTER_TABLE_FUNC(L, mtIndex, IsRenderTarget);
 
     REGISTER_TABLE_FUNC(L, mtIndex, ReloadFrom);
+
+    REGISTER_TABLE_FUNC(L, mtIndex, ReloadPart);
 
     REGISTER_TABLE_FUNC(L, mtIndex, GetWidth);
 

@@ -71,6 +71,13 @@ public:
     // Hands the vertex array over (the compact renderer keeps it) and forgets it.
     void* TakeVertexArray();
     glm::vec3 GetVertexPosition(uint32_t index);
+
+    // Console only (GX), for a COMPACT mesh: take another mesh asset's vertex colours -- the same
+    // mesh painted differently, same vertices in the same order -- without loading it. Staged a
+    // piece at a time (up to maxVertices from vertex `at`; returns the next vertex, outTotal when
+    // done, or -1), then applied all at once, so the change shows in one frame.
+    int32_t StageColorsFrom(const std::string& assetName, uint32_t at, uint32_t maxVertices, uint32_t& outTotal);
+    bool ApplyStagedColors();
     uint32_t GetVertexSize() const;
 
     static bool HandlePropChange(Datum* datum, uint32_t index, const void* newValue);
@@ -111,6 +118,11 @@ private:
     bool mGenerateTriangleCollisionMesh;
     bool mHasVertexColor;
     bool mCompactVertices = false;
+
+    // StageColorsFrom: the colours read so far, whose asset, and where its vertices start
+    std::vector<uint32_t> mStagedColors;
+    std::string mStagedFrom;
+    uint32_t mStagedDataAt = 0;
 
     // Graphics Resource
     StaticMeshResource mResource;

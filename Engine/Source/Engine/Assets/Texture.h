@@ -22,6 +22,9 @@ public:
     // read straight off the disc in small pieces, when the two are the same size and format.
     // Nothing big is allocated or freed -- see the .cpp. False (and nothing changed) otherwise.
     bool ReloadFrom(const std::string& assetName);
+    // The same, a piece at a time: up to maxBytes from byte `at`. Returns where the next piece
+    // starts (outTotal, the texel bytes, when done), or -1.
+    int32_t ReloadPart(const std::string& assetName, uint32_t at, uint32_t maxBytes, uint32_t& outTotal);
 
     // Asset Interface
     virtual void LoadStream(Stream& stream, Platform platform) override;
@@ -71,6 +74,9 @@ public:
     static bool HandlePropChange(class Datum* datum, uint32_t index, const void* newValue);
 
 protected:
+
+    std::string mReloadSource;          // ReloadPart: the asset being read in, and where its texels start
+    uint32_t mReloadOffset = 0;
 
     uint32_t mWidth;
     uint32_t mHeight;

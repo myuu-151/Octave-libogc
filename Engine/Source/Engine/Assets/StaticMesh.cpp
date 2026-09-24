@@ -1,4 +1,8 @@
 #include "Assets/StaticMesh.h"
+#if API_GX && !EDITOR
+#include <gccore.h>
+#include "System/System.h"
+#endif
 #include "Renderer.h"
 #include "Vertex.h"
 #include "AssetManager.h"
@@ -537,6 +541,132 @@ glm::vec3 StaticMesh::GetVertexPosition(uint32_t index)
     }
 
     return mHasVertexColor ? GetColorVertices()[index].mPosition : GetVertices()[index].mPosition;
+}
+
+// WHY. A marathon changes colours every zone, and on the GameCube the pipe's palettes are the same
+// meshes painted differently. Loading another palette's meshes to swap them in held two sets at
+// once (2.8 MB more) and cut the heap up; here the new colours are read off the disc, 4 bytes a
+// vertex, and written into the compact vertex array the display lists already point at.
+int32_t StaticMesh::StageColorsFrom(const std::string& assetName, uint32_t at, uint32_t maxVertices, uint32_t& outTotal)
+{
+    outTotal = 0;
+#if API_GX && !EDITOR
+    AssetStub* stub = AssetManager::Get()->GetAssetStub(assetName);
+    if (!IsLoaded() || !GetResource()->mCompact || GetResource()->mCompactVertices == nullptr ||
+        stub == nullptr || stub->mPath.empty())
+    {
+        return -1;
+    }
+
+    if (at == 0 || mStagedFrom != assetName)
+    {
+        // The header, up to the first vertex: the name, the counts, the material, two flags.
+        char head[512];
+        if (!SYS_ReadFileRange(stub->mPath.c_str(), true, 0, sizeof(head), head))
+        {
+            return -1;
+        }
+        Stream stream(head, sizeof(head));
+        AssetHeader header = Asset::ReadHeader(stream);
+        if (header.mType != GetType())
+        {
+            return -1;
+        }
+        stream.SetAssetVersion(header.mVersion);
+        std::string name;
+        stream.ReadString(name);
+        uint32_t numVertices = stream.ReadUint32();
+        stream.ReadUint32();                                // indices
+        stream.ReadUint32();                                // uv maps
+        MaterialRef material;
+        stream.ReadAsset(material);                         // (already loaded: this mesh uses it)
+        stream.ReadBool();                                  // triangle collision
+        bool hasColor = stream.ReadBool();
+        if (numVertices != mNumVertices || !hasColor || stream.GetPos() >= sizeof(head))
+        {
+            LogWarning("Mesh %s: cannot take %s's colours (a different mesh)", GetName().c_str(), assetName.c_str());
+            mStagedFrom.clear();
+            return -1;
+        }
+        mStagedFrom = assetName;
+        mStagedDataAt = stream.GetPos();
+        mStagedColors.clear();
+        mStagedColors.resize(mNumVertices);
+    }
+
+    outTotal = mNumVertices;
+    if (at >= mNumVertices)
+    {
+        return (int32_t)mNumVertices;
+    }
+
+    // A vertex on the disc: position, two texture coordinates, normal, colour -- 44 bytes.
+    const uint32_t kVertexBytes = 44;
+    const uint32_t kMost = (32 * 1024) / kVertexBytes;
+    static char sPiece[kMost * kVertexBytes];
+    uint32_t colorScale = GetEngineConfig()->mColorScale;
+    uint32_t shiftCount = (colorScale != 1) ? (colorScale >> 1) : 0;
+    uint32_t stop = (maxVertices >= mNumVertices - at) ? mNumVertices : at + maxVertices;
+    for (uint32_t from = at; from < stop; from += kMost)
+    {
+        uint32_t n = (stop - from < kMost) ? (stop - from) : kMost;
+        if (!SYS_ReadFileRange(stub->mPath.c_str(), true, mStagedDataAt + from * kVertexBytes, n * kVertexBytes, sPiece))
+        {
+            LogError("Mesh %s: reading %s's colours failed", GetName().c_str(), assetName.c_str());
+            mStagedFrom.clear();
+            return -1;
+        }
+        Stream stream(sPiece, n * kVertexBytes);
+        for (uint32_t i = 0; i < n; ++i)
+        {
+            stream.ReadVec3();
+            stream.ReadVec2();
+            stream.ReadVec2();
+            stream.ReadVec3();
+            uint32_t color = stream.ReadUint32();
+            if (shiftCount != 0)
+            {
+                uint8_t* color8 = (uint8_t*)(&color);
+                color8[0] = color8[0] >> shiftCount;
+                color8[1] = color8[1] >> shiftCount;
+                color8[2] = color8[2] >> shiftCount;
+                color8[3] = color8[3] >> shiftCount;
+            }
+            mStagedColors[from + i] = color;
+        }
+    }
+    return (int32_t)stop;
+#else
+    (void)assetName; (void)at; (void)maxVertices;
+    return -1;
+#endif
+}
+
+bool StaticMesh::ApplyStagedColors()
+{
+#if API_GX && !EDITOR
+    StaticMeshResource* resource = GetResource();
+    if (mStagedColors.size() != mNumVertices || !resource->mCompact || resource->mCompactVertices == nullptr)
+    {
+        return false;
+    }
+    // position (12 bytes), colour (4): the colour is the last word of each 16, in GX's byte order
+    // (reversed, as GFX_CreateStaticMeshResource does for a mesh as it is loaded)
+    uint8_t* compact = (uint8_t*)resource->mCompactVertices;
+    for (uint32_t i = 0; i < mNumVertices; ++i)
+    {
+        uint32_t color = mStagedColors[i];
+        ReverseColorUint32(color);
+        memcpy(compact + i * 16 + 12, &color, 4);
+    }
+    DCFlushRange(compact, mNumVertices * 16);
+    GX_InvVtxCache();
+    std::vector<uint32_t>().swap(mStagedColors);
+    mStagedFrom.clear();
+    return true;
+#else
+    return false;
+#endif
 }
 
 void* StaticMesh::TakeVertexArray()

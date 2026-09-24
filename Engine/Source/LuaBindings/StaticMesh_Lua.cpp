@@ -29,6 +29,29 @@ int StaticMesh_Lua::SetMaterial(lua_State* L)
     return 0;
 }
 
+// mesh:StageColorsFrom(name, at, maxVertices) -> next, total, and mesh:ApplyStagedColors() -> bool:
+// see StaticMesh::StageColorsFrom. next is -1 when it cannot (not a GameCube, not compact, another mesh).
+int StaticMesh_Lua::StageColorsFrom(lua_State* L)
+{
+    StaticMesh* mesh = CHECK_STATIC_MESH(L, 1);
+    const char* name = CHECK_STRING(L, 2);
+    uint32_t at = (uint32_t)CHECK_INTEGER(L, 3);
+    uint32_t maxVertices = (uint32_t)CHECK_INTEGER(L, 4);
+
+    uint32_t total = 0;
+    int32_t next = mesh->StageColorsFrom(name, at, maxVertices, total);
+    lua_pushinteger(L, next);
+    lua_pushinteger(L, total);
+    return 2;
+}
+
+int StaticMesh_Lua::ApplyStagedColors(lua_State* L)
+{
+    StaticMesh* mesh = CHECK_STATIC_MESH(L, 1);
+    lua_pushboolean(L, mesh->ApplyStagedColors());
+    return 1;
+}
+
 int StaticMesh_Lua::GetNumIndices(lua_State* L)
 {
     StaticMesh* mesh = CHECK_STATIC_MESH(L, 1);
@@ -178,6 +201,10 @@ void StaticMesh_Lua::Bind()
     REGISTER_TABLE_FUNC(L, mtIndex, HasTriangleMeshCollision);
 
     REGISTER_TABLE_FUNC(L, mtIndex, EnableTriangleMeshCollision);
+
+    REGISTER_TABLE_FUNC(L, mtIndex, StageColorsFrom);
+
+    REGISTER_TABLE_FUNC(L, mtIndex, ApplyStagedColors);
 
     lua_pop(L, 1);
     OCT_ASSERT(lua_gettop(L) == 0);

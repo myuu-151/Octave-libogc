@@ -228,6 +228,14 @@ const char* GetPerfAverageLine();
 const char* GetPerfWorstLine();
 #endif
 
+// System.GetClockMs() -> the milliseconds since the game started, read now (not the frame's
+// time): for timing work within a frame, and a seed. A whole number, and it wraps after 24 days.
+int System_Lua::GetClockMs(lua_State* L)
+{
+    lua_pushinteger(L, (lua_Integer)((SYS_GetTimeMicroseconds() / 1000) & 0x7FFFFFFF));
+    return 1;
+}
+
 int System_Lua::GetPerfReport(lua_State* L)
 {
 #if PLATFORM_DOLPHIN
@@ -262,6 +270,8 @@ void System_Lua::Bind()
     REGISTER_TABLE_FUNC(L, tableIdx, SetSaveInfo);
     REGISTER_TABLE_FUNC(L, tableIdx, GetSaveCard);
     REGISTER_TABLE_FUNC(L, tableIdx, GetPerfReport);
+
+    REGISTER_TABLE_FUNC(L, tableIdx, GetClockMs);
 
     REGISTER_TABLE_FUNC(L, tableIdx, SetScreenOrientation);
 
