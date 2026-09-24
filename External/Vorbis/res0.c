@@ -661,8 +661,10 @@ static int _01inverse(vorbis_block *vb,vorbis_look_residue *vl,
     int partwords=(partvals+partitions_per_word-1)/partitions_per_word;
     int ***partword=alloca(ch*sizeof(*partword));
 
-    for(j=0;j<ch;j++)
+    for(j=0;j<ch;j++){
       partword[j]=_vorbis_block_alloc(vb,partwords*sizeof(*partword[j]));
+      if(!partword[j])return(0);            /* OCTAVE: out of memory: the residue left out */
+    }
 
     for(s=0;s<look->stages;s++){
 
@@ -816,6 +818,7 @@ int res2_inverse(vorbis_block *vb,vorbis_look_residue *vl,
     int partvals=n/samples_per_partition;
     int partwords=(partvals+partitions_per_word-1)/partitions_per_word;
     int **partword=_vorbis_block_alloc(vb,partwords*sizeof(*partword));
+    if(!partword)return(0);                 /* OCTAVE: out of memory: the residue left out */
 
     for(i=0;i<ch;i++)if(nonzero[i])break;
     if(i==ch)return(0); /* no nonzero vectors */

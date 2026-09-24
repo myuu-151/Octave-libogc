@@ -80,6 +80,17 @@ int vorbis_block_init(vorbis_dsp_state *v, vorbis_block *vb){
   vb->vd=v;
   vb->localalloc=0;
   vb->localstore=NULL;
+  if(!v->analysisp && v->vi && v->vi->codec_setup){
+    /* OCTAVE: a decoder's scratch memory taken NOW, whole: a packet needs its pcm (the channels
+       times the long block's floats) and a little more for the floor and residue. Left to grow as
+       packets came, it was malloc'd part way through a song -- on a console, whenever the heap
+       happened to have no room, and the NULL was then written through. */
+    codec_setup_info *ci=v->vi->codec_setup;
+    long want=v->vi->channels*ci->blocksizes[1]*(long)sizeof(float)+16384;
+    vb->localstore=_ogg_malloc(want);
+    if(!vb->localstore)return(-1);
+    vb->localalloc=want;
+  }
   if(v->analysisp){
     vorbis_block_internal *vbi=
       vb->internal=_ogg_calloc(1,sizeof(vorbis_block_internal));
@@ -103,8 +114,16 @@ void *_vorbis_block_alloc(vorbis_block *vb,long bytes){
   bytes=(bytes+(WORD_ALIGN-1)) & ~(WORD_ALIGN-1);
   if(bytes+vb->localtop>vb->localalloc){
     /* can't just _ogg_realloc... there are outstanding pointers */
+    /* OCTAVE: a failed malloc gives NULL and leaves the block as it was (the caller gives up
+       on the packet), rather than losing the store and handing out pointers from address 0. */
+    void *store=_ogg_malloc(bytes);
+    if(!store)return(NULL);
     if(vb->localstore){
       struct alloc_chain *link=_ogg_malloc(sizeof(*link));
+      if(!link){
+        _ogg_free(store);
+        return(NULL);
+      }
       vb->totaluse+=vb->localtop;
       link->next=vb->reap;
       link->ptr=vb->localstore;
@@ -112,7 +131,7 @@ void *_vorbis_block_alloc(vorbis_block *vb,long bytes){
     }
     /* highly conservative */
     vb->localalloc=bytes;
-    vb->localstore=_ogg_malloc(vb->localalloc);
+    vb->localstore=store;
     vb->localtop=0;
   }
   {
@@ -135,8 +154,12 @@ void _vorbis_block_ripcord(vorbis_block *vb){
   }
   /* consolidate storage */
   if(vb->totaluse){
-    vb->localstore=_ogg_realloc(vb->localstore,vb->totaluse+vb->localalloc);
-    vb->localalloc+=vb->totaluse;
+    /* OCTAVE: no room to grow is not a loss: the store as it is stays */
+    void *grown=_ogg_realloc(vb->localstore,vb->totaluse+vb->localalloc);
+    if(grown){
+      vb->localstore=grown;
+      vb->localalloc+=vb->totaluse;
+    }
     vb->totaluse=0;
   }
 

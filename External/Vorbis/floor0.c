@@ -178,6 +178,7 @@ static void *floor0_inverse1(vorbis_block *vb,vorbis_look_floor *i){
          smash; b->dim is provably more than we can overflow the
          vector */
       float *lsp=_vorbis_block_alloc(vb,sizeof(*lsp)*(look->m+b->dim+1));
+      if(!lsp)goto eop;                     /* OCTAVE: out of memory */
 
       if(vorbis_book_decodev_set(b,lsp,&vb->opb,look->m)==-1)goto eop;
       for(j=0;j<look->m;){

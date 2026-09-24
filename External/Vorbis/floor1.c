@@ -963,6 +963,7 @@ static void *floor1_inverse1(vorbis_block *vb,vorbis_look_floor *in){
   /* unpack wrapped/predicted values from stream */
   if(oggpack_read(&vb->opb,1)==1){
     int *fit_value=_vorbis_block_alloc(vb,(look->posts)*sizeof(*fit_value));
+    if(!fit_value)return(NULL);             /* OCTAVE: out of memory: no floor (silent) */
 
     fit_value[0]=oggpack_read(&vb->opb,ov_ilog(look->quant_q-1));
     fit_value[1]=oggpack_read(&vb->opb,ov_ilog(look->quant_q-1));

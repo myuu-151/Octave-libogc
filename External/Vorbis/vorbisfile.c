@@ -608,7 +608,11 @@ static int _make_decode_ready(OggVorbis_File *vf){
     if(vorbis_synthesis_init(&vf->vd,vf->vi))
       return OV_EBADLINK;
   }
-  vorbis_block_init(&vf->vd,&vf->vb);
+  if(vorbis_block_init(&vf->vd,&vf->vb)){
+    /* OCTAVE: no room for the decoder's scratch memory (see vorbis_block_init) */
+    vorbis_dsp_clear(&vf->vd);
+    return OV_EFAULT;
+  }
   vf->ready_state=INITSET;
   vf->bittrack=0.f;
   vf->samptrack=0.f;
