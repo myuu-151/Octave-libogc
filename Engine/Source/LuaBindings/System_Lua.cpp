@@ -8,6 +8,14 @@
 
 #include "LuaBindings/System_Lua.h"
 #include "LuaBindings/Stream_Lua.h"
+#include "AssetManager.h"
+#include "Assets/Texture.h"
+#include "Assets/StaticMesh.h"
+#include "Assets/SkeletalMesh.h"
+#include "Assets/SoundWave.h"
+#include "Assets/Font.h"
+#include <algorithm>
+#include <unordered_map>
 
 #if LUA_ENABLED
 
@@ -128,6 +136,103 @@ int System_Lua::GetFreeMemory(lua_State* L)
 #endif
 
     lua_pushinteger(L, freeBytes);
+    return 1;
+}
+
+// System.PinBlocks(bytes): on the GameCube, freed blocks of this size (to an eighth over) are kept
+// for the next allocation of it and never given back to the heap (BigBlockCache_Dolphin.cpp) -- for
+// what is streamed in and out all the time at one size, a sky's frames. 0 stops. Nothing elsewhere.
+#if PLATFORM_GAMECUBE
+void BigBlockCachePin(size_t size);
+#endif
+int System_Lua::PinBlocks(lua_State* L)
+{
+    lua_Integer bytes = luaL_checkinteger(L, 1);
+#if PLATFORM_GAMECUBE
+    BigBlockCachePin(bytes > 0 ? (size_t)bytes : 0);
+#else
+    (void)bytes;
+#endif
+    return 0;
+}
+
+// System.MemoryCensus([top]) -- DIAGNOSTIC: logs every loaded asset's memory (textures' texel data,
+// meshes' arrays and display lists, sounds' samples), largest first (the first `top`, default 40),
+// the totals by type, and the heap: free, and the largest single block malloc can still give.
+// Returns the total bytes counted.
+int System_Lua::MemoryCensus(lua_State* L)
+{
+    int top = (int)luaL_optinteger(L, 1, 40);
+    struct Row { std::string name; std::string type; uint32_t bytes; };
+    std::vector<Row> rows;
+    std::unordered_map<std::string, uint32_t> byType;
+    uint64_t total = 0;
+    for (auto& it : AssetManager::Get()->GetAssetMap())
+    {
+        Asset* asset = it.second ? it.second->mAsset : nullptr;
+        if (asset == nullptr) continue;
+        uint32_t bytes = 0;
+        TypeId type = asset->GetType();
+        if (type == Texture::GetStaticType())
+        {
+#if API_GX
+            TextureResource* r = static_cast<Texture*>(asset)->GetResource();
+            bytes = r->mTplSize + r->mDynamicSize;
+#endif
+        }
+        else if (type == StaticMesh::GetStaticType())
+        {
+            StaticMesh* m = static_cast<StaticMesh*>(asset);
+            void* verts = m->HasVertexColor() ? (void*)m->GetColorVertices() : (void*)m->GetVertices();
+            if (verts != nullptr) bytes += m->GetNumVertices() * m->GetVertexSize();
+            if (m->GetIndices() != nullptr) bytes += m->GetNumIndices() * sizeof(IndexType);
+#if API_GX
+            StaticMeshResource* r = m->GetResource();
+            bytes += r->mDisplayListSize + r->mColorDisplayListSize;
+            if (r->mCompact && r->mCompactVertices != nullptr) bytes += m->GetNumVertices() * 16;
+#endif
+        }
+        else if (type == SkeletalMesh::GetStaticType())
+        {
+            SkeletalMesh* m = static_cast<SkeletalMesh*>(asset);
+            bytes = m->GetNumVertices() * sizeof(VertexSkinned) + m->GetNumIndices() * sizeof(IndexType);
+        }
+        else if (type == SoundWave::GetStaticType())
+        {
+            bytes = static_cast<SoundWave*>(asset)->GetWaveDataSize();
+        }
+        else if (type == Font::GetStaticType())
+        {
+#if API_GX
+            Texture* t = static_cast<Font*>(asset)->GetTexture();
+            if (t != nullptr && t->GetResource() != nullptr) bytes = t->GetResource()->mTplSize;
+#endif
+        }
+        rows.push_back({ asset->GetName(), asset->GetTypeName(), bytes });
+        byType[asset->GetTypeName()] += bytes;
+        total += bytes;
+    }
+    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.bytes > b.bytes; });
+    LogDebug("CENSUS %d assets loaded, %u KB counted", (int)rows.size(), (unsigned)(total / 1024));
+    for (auto& t : byType) LogDebug("CENSUS type %-14s %6u KB", t.first.c_str(), t.second / 1024);
+    for (int i = 0; i < (int)rows.size() && i < top; ++i)
+        LogDebug("CENSUS %6u KB  %-12s %s", rows[i].bytes / 1024, rows[i].type.c_str(), rows[i].name.c_str());
+    LogDebug("CENSUS lua %d KB", lua_gc(L, LUA_GCCOUNT, 0));
+#if PLATFORM_DOLPHIN
+    struct mallinfo info = mallinfo();
+    size_t arena = (size_t)((char*)SYS_GetArena1Hi() - (char*)SYS_GetArena1Lo());
+    // the largest block malloc can still give: halving down from 8 MB, then refining
+    size_t lo = 0, hi = 8 * 1024 * 1024;
+    while (hi - lo > 4096)
+    {
+        size_t mid = (lo + hi) / 2;
+        void* p = malloc(mid);
+        if (p != nullptr) { free(p); lo = mid; } else { hi = mid; }
+    }
+    LogDebug("CENSUS heap free %d KB (+ arena %u KB), largest block %u KB",
+             info.fordblks / 1024, (unsigned)(arena / 1024), (unsigned)(lo / 1024));
+#endif
+    lua_pushinteger(L, (lua_Integer)total);
     return 1;
 }
 
@@ -266,6 +371,8 @@ void System_Lua::Bind()
     REGISTER_TABLE_FUNC(L, tableIdx, UnmountMemoryCard);
 
     REGISTER_TABLE_FUNC(L, tableIdx, GetFreeMemory);
+    REGISTER_TABLE_FUNC(L, tableIdx, MemoryCensus);
+    REGISTER_TABLE_FUNC(L, tableIdx, PinBlocks);
     REGISTER_TABLE_FUNC(L, tableIdx, GetStorageMode);
     REGISTER_TABLE_FUNC(L, tableIdx, SetSaveInfo);
     REGISTER_TABLE_FUNC(L, tableIdx, GetSaveCard);

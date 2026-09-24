@@ -14,6 +14,8 @@ struct System_Lua
     static int DeleteSave(lua_State* L);
     static int UnmountMemoryCard(lua_State* L);
     static int GetFreeMemory(lua_State* L);
+    static int MemoryCensus(lua_State* L);
+    static int PinBlocks(lua_State* L);
     static int GetStorageMode(lua_State* L);
     static int SetSaveInfo(lua_State* L);
     static int GetSaveCard(lua_State* L);

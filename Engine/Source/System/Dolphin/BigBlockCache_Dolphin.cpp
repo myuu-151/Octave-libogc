@@ -27,6 +27,7 @@
 #include <malloc.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/reent.h>
 
 extern "C"
@@ -54,6 +55,18 @@ namespace
 
     Kept sKept[MAX_KEPT];
     uint32_t sNumKept = 0;
+
+    // PINNED: blocks of one size a game streams all the time (a sky's frames) are never given back
+    // to the heap, so the next of them always finds one here -- given back, the heap's small
+    // allocations cut them up, and with megabytes free not one 64 KB block was left for a frame.
+    size_t sPinLo = 0;
+    size_t sPinHi = 0;
+    const uint32_t PIN_MAX = 8;             // at most this many pinned kept at once: the rest go back
+
+    bool IsPinned(size_t size)
+    {
+        return sPinLo != 0 && size >= sPinLo && size <= sPinHi;
+    }
 
     struct Lock
     {
@@ -104,13 +117,24 @@ namespace
                 return false;
             }
 
-            uint32_t biggest = 0;
-            for (uint32_t i = 1; i < sNumKept; ++i)
+            uint32_t pinned = 0;
+            for (uint32_t i = 0; i < sNumKept; ++i)
             {
-                if (sKept[i].mSize > sKept[biggest].mSize)
+                if (IsPinned(sKept[i].mSize)) pinned++;
+            }
+            // the biggest block that may go: any unpinned one, or a pinned one past PIN_MAX
+            int32_t biggest = -1;
+            for (uint32_t i = 0; i < sNumKept; ++i)
+            {
+                bool may = !IsPinned(sKept[i].mSize) || pinned > PIN_MAX;
+                if (may && (biggest < 0 || sKept[i].mSize > sKept[biggest].mSize))
                 {
-                    biggest = i;
+                    biggest = int32_t(i);
                 }
+            }
+            if (biggest < 0)
+            {
+                return false;               // only pinned blocks left: they stay
             }
 
             ptr = sKept[biggest].mPtr;
@@ -120,6 +144,14 @@ namespace
         __real_free(ptr);
         return true;
     }
+}
+
+// Blocks of `size` bytes (to an eighth over) are kept for good once freed: see IsPinned. 0 stops.
+void BigBlockCachePin(size_t size)
+{
+    Lock lock;
+    sPinLo = size;
+    sPinHi = size + size / 8;
 }
 
 // What the cache holds: free memory as far as the game is concerned (System.GetFreeMemory).
@@ -201,6 +233,18 @@ void __wrap_free(void* ptr)
 void* __wrap_realloc(void* ptr, size_t size)
 {
     void* out = __real_realloc(ptr, size);
+    if (out == nullptr && ptr != nullptr && size >= BIG_BLOCK)
+    {
+        // grown into a kept block of its new size, if there is one (a Lua array doubling)
+        void* kept = Take(size, 1);
+        if (kept != nullptr)
+        {
+            size_t old = malloc_usable_size(ptr);
+            memcpy(kept, ptr, old < size ? old : size);
+            __wrap_free(ptr);
+            return kept;
+        }
+    }
     while (out == nullptr && size > 0 && GiveBackOne())
     {
         out = __real_realloc(ptr, size);
