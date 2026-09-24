@@ -52,6 +52,46 @@ int StaticMesh_Lua::ApplyStagedColors(lua_State* L)
     return 1;
 }
 
+// mesh:SetVertexData(xyz, rgba) -> bool: every vertex's position and colour, set anew (see
+// StaticMesh::SetVertexData). xyz is a flat table of 3 numbers a vertex; rgba of 4 a vertex, 0-1.
+int StaticMesh_Lua::SetVertexData(lua_State* L)
+{
+    StaticMesh* mesh = CHECK_STATIC_MESH(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    luaL_checktype(L, 3, LUA_TTABLE);
+    uint32_t count = mesh->GetNumVertices();
+    if ((uint32_t)luaL_len(L, 2) != count * 3 || (uint32_t)luaL_len(L, 3) != count * 4)
+    {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    static std::vector<float> xyz;
+    static std::vector<uint32_t> rgba;
+    xyz.resize(count * 3);
+    rgba.resize(count);
+    for (uint32_t i = 0; i < count * 3; ++i)
+    {
+        lua_rawgeti(L, 2, (lua_Integer)(i + 1));
+        xyz[i] = (float)lua_tonumber(L, -1);
+        lua_pop(L, 1);
+    }
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        uint32_t packed = 0;
+        for (uint32_t c = 0; c < 4; ++c)
+        {
+            lua_rawgeti(L, 3, (lua_Integer)(i * 4 + c + 1));
+            float v = (float)lua_tonumber(L, -1);
+            lua_pop(L, 1);
+            v = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v);
+            packed |= (uint32_t)(v * 255.0f + 0.5f) << (8 * c);
+        }
+        rgba[i] = packed;
+    }
+    lua_pushboolean(L, mesh->SetVertexData(xyz.data(), rgba.data(), count));
+    return 1;
+}
+
 int StaticMesh_Lua::GetNumIndices(lua_State* L)
 {
     StaticMesh* mesh = CHECK_STATIC_MESH(L, 1);
@@ -205,6 +245,8 @@ void StaticMesh_Lua::Bind()
     REGISTER_TABLE_FUNC(L, mtIndex, StageColorsFrom);
 
     REGISTER_TABLE_FUNC(L, mtIndex, ApplyStagedColors);
+
+    REGISTER_TABLE_FUNC(L, mtIndex, SetVertexData);
 
     lua_pop(L, 1);
     OCT_ASSERT(lua_gettop(L) == 0);

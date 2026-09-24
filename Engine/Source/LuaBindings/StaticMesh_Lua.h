@@ -28,6 +28,7 @@ struct StaticMesh_Lua
     static int EnableTriangleMeshCollision(lua_State* L);
     static int StageColorsFrom(lua_State* L);
     static int ApplyStagedColors(lua_State* L);
+    static int SetVertexData(lua_State* L);
 
     static void Bind();
 };

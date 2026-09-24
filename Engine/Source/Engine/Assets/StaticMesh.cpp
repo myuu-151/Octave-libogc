@@ -678,6 +678,86 @@ bool StaticMesh::ApplyStagedColors()
 #endif
 }
 
+bool StaticMesh::SetVertexData(const float* xyz, const uint32_t* rgba, uint32_t count)
+{
+    if (count != mNumVertices || count == 0 || !mHasVertexColor || !IsLoaded())
+    {
+        return false;
+    }
+
+    glm::vec3 lo = { FLT_MAX, FLT_MAX, FLT_MAX };
+    glm::vec3 hi = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        glm::vec3 p = { xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2] };
+        lo = glm::min(lo, p);
+        hi = glm::max(hi, p);
+    }
+
+#if API_GX && !EDITOR
+    // the colour as a loaded mesh's is kept: scaled down for the colour scale, bytes reversed
+    uint32_t colorScale = GetEngineConfig()->mColorScale;
+    uint32_t shiftCount = (colorScale != 1) ? (colorScale >> 1) : 0;
+    auto GxColor = [shiftCount](uint32_t color)
+    {
+        if (shiftCount != 0)
+        {
+            uint8_t* color8 = (uint8_t*)(&color);
+            color8[0] >>= shiftCount;
+            color8[1] >>= shiftCount;
+            color8[2] >>= shiftCount;
+            color8[3] >>= shiftCount;
+        }
+        ReverseColorUint32(color);
+        return color;
+    };
+    StaticMeshResource* resource = GetResource();
+    if (resource->mCompact && resource->mCompactVertices != nullptr)
+    {
+        uint8_t* compact = (uint8_t*)resource->mCompactVertices;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            memcpy(compact + i * 16, xyz + i * 3, 12);
+            uint32_t color = GxColor(rgba[i]);
+            memcpy(compact + i * 16 + 12, &color, 4);
+        }
+        DCFlushRange(compact, count * 16);
+    }
+    else if (mVertices != nullptr)
+    {
+        VertexColor* vertices = GetColorVertices();
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            vertices[i].mPosition = { xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2] };
+            vertices[i].mColor = GxColor(rgba[i]);
+        }
+        DCFlushRange(vertices, count * sizeof(VertexColor));
+    }
+    else
+    {
+        return false;
+    }
+    GX_InvVtxCache();
+#else
+    if (mVertices == nullptr || mIndices == nullptr)
+    {
+        return false;
+    }
+    VertexColor* vertices = GetColorVertices();
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        vertices[i].mPosition = { xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2] };
+        vertices[i].mColor = rgba[i];
+    }
+    GFX_DestroyStaticMeshResource(this);
+    GFX_CreateStaticMeshResource(this, true, mNumVertices, vertices, mNumIndices, mIndices);
+#endif
+
+    mBounds.mCenter = (lo + hi) * 0.5f;
+    mBounds.mRadius = glm::length(hi - lo) * 0.5f;
+    return true;
+}
+
 void* StaticMesh::TakeVertexArray()
 {
     void* vertices = mVertices;

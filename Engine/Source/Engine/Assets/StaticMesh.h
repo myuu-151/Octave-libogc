@@ -79,6 +79,13 @@ public:
     // maxVertices 0 while nothing is being drawn: that allocates the staging buffer, kept after.
     int32_t StageColorsFrom(const std::string& assetName, uint32_t at, uint32_t maxVertices, uint32_t& outTotal);
     bool ApplyStagedColors();
+
+    // Every vertex's position and colour, set anew (a mesh with vertex colours, the same number of
+    // vertices): a shape drawn afresh each frame, such as a trail traced behind something. xyz is
+    // 3 floats a vertex; rgba 1 packed colour a vertex (r | g << 8 | b << 16 | a << 24, as the
+    // mesh files store them). The bounds follow. On GX the arrays the display list reads are
+    // written in place; elsewhere the GPU buffers are made again (they are small).
+    bool SetVertexData(const float* xyz, const uint32_t* rgba, uint32_t count);
     uint32_t GetVertexSize() const;
 
     static bool HandlePropChange(Datum* datum, uint32_t index, const void* newValue);
