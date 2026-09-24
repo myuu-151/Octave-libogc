@@ -936,11 +936,14 @@ Asset* AssetManager::LoadAsset(AssetStub& stub)
                 // here; the guard makes that a plain load rather than a nested frame.
                 mLoadPumpDrawing = true;
 
-                // The number of assets discovered is the only total available before the load
-                // starts. Not all of them will be loaded, so the bar runs ahead of the truth
-                // rather than stalling at the end, which is the better way round.
-                const float total = (float)glm::max<size_t>(1, mUuidMap.size());
-                Renderer::Get()->DrawLoadingFrame(float(mLoadPumpCount) / total, "Loading...");
+                // There is no total to measure against before the load starts: every asset on
+                // the disc is known, but a scene loads only some of them -- a game with thousands
+                // of streamed frames loaded ~50 of 3600 at boot and the bar never left empty. So it
+                // EASES toward full, count / (count + LOAD_PUMP_HALF): half full after that many
+                // assets, and closing in on full however many more there are.
+                const float LOAD_PUMP_HALF = 40.0f;
+                const float count = float(mLoadPumpCount);
+                Renderer::Get()->DrawLoadingFrame(count / (count + LOAD_PUMP_HALF), "Loading...");
 
                 mLoadPumpDrawing = false;
             }

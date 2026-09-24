@@ -17,6 +17,7 @@
 // below reads the disc by poking the DI hardware registers directly (see DiRead),
 // which links nothing from libogc and keeps the DOL apploader-bootable.
 #include <unistd.h>
+#include <dirent.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <malloc.h>
@@ -454,6 +455,41 @@ static void IsoLocate()
     {
         IsoLog("ISO try: %s", c.c_str());
         if (IsoOpenSD(c.c_str())) return;
+    }
+
+    // 1b) RENAMED: the image need not be called <project>.iso. Any .iso in the same places that
+    //     holds THIS project -- its .octp at the root of the disc's file table -- is the one.
+    //     (Named only, a renamed image was not found, the disc was tried instead, and on an SD rig
+    //     with an empty drive the game sat on a green screen.)
+    {
+        std::string octp;
+        for (char ch : pn + ".octp") octp += (char)tolower((unsigned char)ch);
+        std::string dirs[] = { pd, pd + "../", "/", "./", "/games/", "sd:/", "sd:/games/" };
+        for (const std::string& dir : dirs)
+        {
+            DIR* d = opendir(dir.empty() ? "." : dir.c_str());
+            if (d == nullptr) continue;
+            struct dirent* ent;
+            while ((ent = readdir(d)) != nullptr)
+            {
+                std::string name = ent->d_name;
+                if (name.size() < 5) continue;
+                std::string ext;
+                for (size_t k = name.size() - 4; k < name.size(); ++k) ext += (char)tolower((unsigned char)name[k]);
+                if (ext != ".iso" && ext != ".gcm") continue;
+                std::string path = dir + name;
+                IsoLog("ISO scan: %s", path.c_str());
+                if (!IsoOpenSD(path.c_str())) continue;
+                if (sIsoFiles.count(octp) != 0)
+                {
+                    closedir(d);
+                    return;
+                }
+                IsoLog("ISO scan: %s is not this game", path.c_str());     // another game's image
+                fclose(sIso); sIso = nullptr; sIsoMode = ISO_NONE; sIsoFiles.clear();
+            }
+            closedir(d);
+        }
     }
 
     // 2) No SD image found -> read the physical disc via the DI reader, NOW.
