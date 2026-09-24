@@ -990,7 +990,9 @@ ThreadObject* SYS_CreateThread(ThreadFuncFP func, void* arg)
         nullptr,        /* stack base */
         64 * 1024,      /* stack size: 16 KB overflowed on hardware once a thread read the SD card
                            (fread -> libfat -> SD driver); the async asset loader does exactly that */
-        64              /* thread priority */);
+        40              /* thread priority: BELOW the main thread's 64. SD and disc reads busy-wait,
+                           so a loader at the main thread's priority held the CPU whenever the main
+                           thread woke from vsync, and its frames waited on the loader's reads */);
 
     if (createStatus != 0)
     {

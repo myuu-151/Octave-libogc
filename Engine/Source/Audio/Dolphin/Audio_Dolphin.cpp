@@ -5,11 +5,15 @@
 
 #include "Assets/SoundWave.h"
 #include "Log.h"
+#include "Profiler.h"
+#include "Maths.h"
 
 #include "System/System.h"
 
 #include <gccore.h>
 #include <asndlib.h>
+#include <ogc/semaphore.h>
+#include <unistd.h>
 #include <malloc.h>
 #include <string.h>
 #include <stdio.h>
@@ -37,6 +41,13 @@ struct MemSource
 
 // The same, over a range of a FILE: the compressed audio stays on the disc. vorbisfile asks for
 // a few KB at a time, so reads go through one small window and most are served from it.
+//
+// The NEXT window is read ahead by the audio I/O thread (AudioIoThread) while this one plays.
+// Read on the main thread, a window refill waited on the disc lock behind the background
+// loader's reads (a streamed sky's 64 KB frames, many a second): measured on hardware, a
+// 83-117 ms frame every second or two, with the rest of the game at 28-30 fps.
+enum { AHEAD_EMPTY = 0, AHEAD_REQUESTED, AHEAD_READY };
+
 struct DiscSource
 {
     std::string path;
@@ -46,9 +57,18 @@ struct DiscSource
     uint8_t*    window = nullptr;
     uint32_t    windowAt = 0;
     uint32_t    windowSize = 0;
+    // Read-ahead. While REQUESTED, only the I/O thread touches `ahead`; READY hands it back.
+    uint8_t*          ahead = nullptr;
+    uint32_t          aheadAt = 0;
+    uint32_t          aheadSize = 0;
+    volatile int32_t  aheadState = AHEAD_EMPTY;
 };
 
 static const uint32_t kDiscWindowBytes = 16 * 1024;
+
+static sem_t sAudioIoSem = LWP_SEM_NULL;
+static lwp_t sAudioIoThread = LWP_THREAD_NULL;
+static void RequestReadAhead(DiscSource* d);
 
 struct StreamVoice
 {
@@ -66,7 +86,8 @@ struct StreamVoice
     uint32_t       bufSize = 0;
     int            nextBuf = 0;         // the one being filled
     uint32_t       filled = 0;          // bytes of it decoded so far
-    uint32_t       sliceBytes = 0;      // how much to decode in one frame
+    uint32_t       sliceBytes = 0;      // the least to decode in one frame
+    uint32_t       bytesPerSec = 0;     // of decoded audio
     int            channels = 2;
     int            bytesPerSample = 1;   // 1 = 8-bit unsigned, 2 = 16-bit LE
     bool           loop = false;
@@ -74,6 +95,27 @@ struct StreamVoice
 };
 
 static StreamVoice sStreams[AUDIO_MAX_VOICES];
+
+// Serves read-ahead requests. Below the main thread's priority (see AUD_Initialize), so it runs
+// while the main thread waits on the GPU and vsync, not in the middle of its work.
+static void* AudioIoThread(void*)
+{
+    while (true)
+    {
+        LWP_SemWait(sAudioIoSem);
+
+        for (int32_t v = 0; v < AUDIO_MAX_VOICES; ++v)
+        {
+            DiscSource* d = &sStreams[v].disc;
+            if (d->aheadState != AHEAD_REQUESTED)
+                continue;
+
+            const bool ok = SYS_ReadFileRange(d->path.c_str(), true, d->base + d->aheadAt, d->aheadSize, (char*)d->ahead);
+            d->aheadState = ok ? AHEAD_READY : AHEAD_EMPTY;   // failed: the main thread reads it itself
+        }
+    }
+    return nullptr;
+}
 
 // ov_callbacks over an in-RAM compressed buffer.
 static size_t MemRead(void* ptr, size_t size, size_t nmemb, void* ds)
@@ -112,6 +154,25 @@ static size_t DiscRead(void* ptr, size_t size, size_t nmemb, void* ds)
     {
         if (d->pos < d->windowAt || d->pos >= d->windowAt + d->windowSize)
         {
+            if (d->aheadState == AHEAD_READY)
+            {
+                if (d->pos >= d->aheadAt && d->pos < d->aheadAt + d->aheadSize)
+                {
+                    // The read-ahead has it: swap the buffers, no disc access here.
+                    uint8_t* w = d->window;
+                    d->window = d->ahead;
+                    d->ahead = w;
+                    d->windowAt = d->aheadAt;
+                    d->windowSize = d->aheadSize;
+                }
+                d->aheadState = AHEAD_EMPTY;    // used, or the stream seeked elsewhere
+            }
+        }
+
+        if (d->pos < d->windowAt || d->pos >= d->windowAt + d->windowSize)
+        {
+            // Not read ahead (the stream's start, a seek, a loop): read it here.
+            SCOPED_FRAME_STAT("AudRead");
             uint32_t fill = d->size - d->pos;
             if (fill > kDiscWindowBytes) fill = kDiscWindowBytes;
             const bool readOk = SYS_ReadFileRange(d->path.c_str(), true, d->base + d->pos, fill, (char*)d->window);
@@ -125,6 +186,8 @@ static size_t DiscRead(void* ptr, size_t size, size_t nmemb, void* ds)
             d->windowAt = d->pos;
             d->windowSize = fill;
         }
+
+        RequestReadAhead(d);
 
         uint32_t from = d->pos - d->windowAt;
         size_t take = d->windowSize - from;
@@ -147,6 +210,29 @@ static int DiscSeek(void* ds, ogg_int64_t off, int whence)
     return 0;
 }
 static long DiscTell(void* ds) { return (long)((DiscSource*)ds)->pos; }
+
+// Ask the I/O thread for the window after the current one, if there is one and nothing is pending.
+static void RequestReadAhead(DiscSource* d)
+{
+    if (d->ahead == nullptr || sAudioIoSem == LWP_SEM_NULL || d->aheadState != AHEAD_EMPTY)
+        return;
+
+    const uint32_t next = d->windowAt + d->windowSize;
+    if (d->windowSize == 0 || next >= d->size)
+        return;
+
+    d->aheadAt = next;
+    d->aheadSize = glm::min(d->size - next, kDiscWindowBytes);
+    d->aheadState = AHEAD_REQUESTED;
+    LWP_SemPost(sAudioIoSem);
+}
+
+// Waits until the I/O thread is done with this source's read-ahead buffer (before freeing it).
+static void WaitReadAhead(DiscSource* d)
+{
+    while (d->aheadState == AHEAD_REQUESTED)
+        usleep(500);
+}
 
 // Decode up to `want` bytes into dst. Returns bytes written (0 = ended).
 static uint32_t StreamFill(StreamVoice* sv, uint8_t* dst, uint32_t want)
@@ -196,6 +282,8 @@ static uint32_t StreamFill(StreamVoice* sv, uint8_t* dst, uint32_t want)
 static void StreamStop(StreamVoice* sv)
 {
     if (!sv->active) return;
+    WaitReadAhead(&sv->disc);
+    sv->disc.aheadState = AHEAD_EMPTY;
     ov_clear(&sv->vf);
     for (int b = 0; b < 3; ++b)
     {
@@ -204,6 +292,7 @@ static void StreamStop(StreamVoice* sv)
     sv->filled = 0;
     if (sv->memOwned) { free(sv->memOwned); sv->memOwned = nullptr; }
     if (sv->disc.window) { free(sv->disc.window); sv->disc.window = nullptr; }
+    if (sv->disc.ahead) { free(sv->disc.ahead); sv->disc.ahead = nullptr; }
     sv->disc.windowSize = 0;
     sv->active = false;
     sv->eof = false;
@@ -346,6 +435,21 @@ void AUD_Initialize()
 {
     ASND_Init();
     ASND_Pause(0);
+
+    // At boot, so its stack sits low in a heap not yet cut up. 64 KB: an SD read goes through
+    // libfat and the SD driver, and 16 KB overflowed on hardware (see SYS_CreateThread).
+    // Priority 50: below the main thread (64), because SD reads busy-wait and a reader at or above
+    // the main thread holds the CPU when it wakes from vsync; above the asset loader (40), so the
+    // music's small reads go before the sky's big ones.
+    if (LWP_SemInit(&sAudioIoSem, 0, 64) != 0)
+    {
+        sAudioIoSem = LWP_SEM_NULL;
+    }
+    else if (LWP_CreateThread(&sAudioIoThread, AudioIoThread, nullptr, nullptr, 64 * 1024, 50) != 0)
+    {
+        LWP_SemDestroy(sAudioIoSem);
+        sAudioIoSem = LWP_SEM_NULL;   // no thread: streams read on the main thread, as before
+    }
 }
 
 void AUD_Shutdown()
@@ -371,6 +475,15 @@ void AUD_Shutdown()
 
 void AUD_Update()
 {
+    // Decoding keeps pace with TIME, not frames. A fixed slice a frame (1/40 s) fell behind below
+    // 40 fps, and then the catch-up below decoded the rest of a buffer in one frame: on hardware at
+    // 28-30 fps, that was a long frame again and again.
+    static uint64_t sLastUpdateUs = 0;
+    const uint64_t nowUs = SYS_GetTimeMicroseconds();
+    float elapsed = (sLastUpdateUs != 0 && nowUs > sLastUpdateUs) ? float(nowUs - sLastUpdateUs) / 1000000.0f : 0.0f;
+    elapsed = glm::min(elapsed, 0.1f);
+    sLastUpdateUs = nowUs;
+
     // Keep streamed voices fed (decode next chunk on the main thread).
     for (int32_t v = 0; v < AUDIO_MAX_VOICES; ++v)
     {
@@ -387,8 +500,13 @@ void AUD_Update()
         uint8_t* buf = sv->buf[sv->nextBuf];
         if (!sv->eof && sv->filled < sv->bufSize)
         {
+            // A quarter more than the time that passed, so the decoder stays ahead of the playback.
+            const uint32_t frameBytes = uint32_t(sv->channels * sv->bytesPerSample);
+            uint32_t slice = uint32_t(sv->bytesPerSec * elapsed * 1.25f);
+            slice -= slice % frameBytes;
+            slice = glm::max(slice, sv->sliceBytes);
             uint32_t want = sv->bufSize - sv->filled;
-            if (want > sv->sliceBytes) want = sv->sliceBytes;
+            if (want > slice) want = slice;
             // If the voice is about to run dry (a long frame, a slow read), finish the buffer now:
             // one long frame is better than a gap in the music.
             if (ASND_TestVoiceBufferReady(v)) want = sv->bufSize - sv->filled;
@@ -469,13 +587,18 @@ void AUD_Play(
             sv->disc.windowAt = 0;
             sv->disc.windowSize = 0;
             sv->disc.window = (uint8_t*)malloc(kDiscWindowBytes);
+            // The read-ahead window. Without it (no memory) the stream still plays, reading here.
+            sv->disc.ahead = (uint8_t*)malloc(kDiscWindowBytes);
+            sv->disc.aheadState = AHEAD_EMPTY;
 
             ov_callbacks dcb = { DiscRead, DiscSeek, MemClose, DiscTell };
             if (sv->disc.window == nullptr ||
                 ov_open_callbacks(&sv->disc, &sv->vf, NULL, 0, dcb) < 0)
             {
                 LogError("SoundWave '%s': failed to open Vorbis stream on disc.", soundWave->GetName().c_str());
+                WaitReadAhead(&sv->disc);
                 if (sv->disc.window) { free(sv->disc.window); sv->disc.window = nullptr; }
+                if (sv->disc.ahead) { free(sv->disc.ahead); sv->disc.ahead = nullptr; }
                 sv->active = false;
                 return;
             }
@@ -524,6 +647,7 @@ void AUD_Play(
 
         // ~0.2s double buffers.
         uint32_t bytesPerSec = soundWave->GetSampleRate() * sv->channels * sv->bytesPerSample;
+        sv->bytesPerSec = bytesPerSec;
         sv->bufSize = ((bytesPerSec / 5) + 31) & ~31u;
         sv->buf[0] = (uint8_t*)memalign(32, sv->bufSize);
         sv->buf[1] = (uint8_t*)memalign(32, sv->bufSize);

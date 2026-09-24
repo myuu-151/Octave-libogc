@@ -29,4 +29,6 @@ private:
     float mTimeSeconds = 0.0f;
     float mDeltaTimeSeconds = 0.0f;
     bool mActive = false;
+    uint32_t mPreviousRetrace = 0;      // consoles: the video retrace count at the last Update
+
 };
