@@ -67,7 +67,10 @@ static void LogFrameStats(const std::vector<CpuStat>& stats, float deltaTime)
             at += snprintf(line + at, sizeof(line) - at, " %s=%.1f", stats[i].mName, sSum[i] / sFrames);
         }
 
-        at += snprintf(line + at, sizeof(line) - at, " | worst %.0fms", sWorstFrame);
+        // Two lines, the average and the worst frame: one no longer fits OctLog's 512 bytes.
+        OctLog("%s", line);
+
+        at = snprintf(line, sizeof(line), "PERF worst %.0fms", sWorstFrame);
 
         for (uint32_t i = 0; i < count && at < int(sizeof(line)) - 24; ++i)
         {

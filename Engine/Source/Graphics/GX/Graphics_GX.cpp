@@ -19,6 +19,7 @@
 #include "Nodes/Widgets/Quad.h"
 #include "Nodes/Widgets/Text.h"
 #include "Assets/Font.h"
+#include "Profiler.h"
 
 #include "Nodes/3D/StaticMesh3d.h"
 #include "Nodes/3D/SkeletalMesh3d.h"
@@ -36,6 +37,122 @@
 #define DEFAULT_FIFO_SIZE    (256*1024)
 
 GxContext gGxContext;
+
+#if PROFILING_ENABLED
+// ---- GPU performance counters ---------------------------------------------------------------
+// The GP counts two things at a time (one "perf0", one "perf1" metric), so each frame measures one
+// pair and the pairs take turns. Every few seconds the per-frame average of each goes to the SD
+// diagnostic log as a GPU line: what the GPU is busy with, which the CPU stats (where "Vsync" is
+// all waiting) cannot tell. Clock counts are shown in ms of GP time; the rest as counts a frame.
+//   xfrm   the transform unit busy          xfWaitOut  transform stalled on setup/raster/pixels
+//   xfWaitIn  transform starved of vertices   txIdle / txStall  texture unit idle / waiting on memory
+//   vcStall   vertex fetch stalls              quads  2x2 pixel quads drawn (fill)
+void OctLog(const char* format, ...);
+
+namespace
+{
+    struct GpMetricPair
+    {
+        uint32_t mPerf0;
+        uint32_t mPerf1;
+        const char* mName0;
+        const char* mName1;
+        bool mClocks0;      // a count of GP clocks (shown in ms)
+        bool mClocks1;
+    };
+
+    const GpMetricPair kGpPairs[] =
+    {
+        { GX_PERF0_XF_XFRM_CLKS,    GX_PERF1_TX_IDLE,        "xfrm",      "txIdle",   true,  true  },
+        { GX_PERF0_XF_WAIT_OUT,     GX_PERF1_TX_MEMSTALL,    "xfWaitOut", "txStall",  true,  true  },
+        { GX_PERF0_XF_WAIT_IN,      GX_PERF1_VC_ALL_STALLS,  "xfWaitIn",  "vcStall",  true,  true  },
+        { GX_PERF0_CLIP_CLKS,       GX_PERF1_CLOCKS,         "clip",      "gpClocks", true,  true  },
+        { GX_PERF0_VERTICES,        GX_PERF1_TEXELS,         "verts",     "texels",   false, false },
+        { GX_PERF0_TRIANGLES,       GX_PERF1_TC_MISS,        "tris",      "tcMiss",   false, false },
+        { GX_PERF0_TRIANGLES_CULLED, GX_PERF1_VC_MISS_REQ,   "culled",    "vcMiss",   false, false },
+        { GX_PERF0_QUAD_NON0CVG,    GX_PERF1_CALL_REQ,       "quads",     "dlLines",  false, false },
+    };
+    const uint32_t kNumGpPairs = sizeof(kGpPairs) / sizeof(kGpPairs[0]);
+
+    // GP clocks per millisecond: 162 MHz on the GameCube, 243 MHz on the Wii.
+#if PLATFORM_GAMECUBE
+    const double kGpClocksPerMs = 162000.0;
+#else
+    const double kGpClocksPerMs = 243000.0;
+#endif
+
+    double sGpSum[kNumGpPairs][2] = {};
+    uint32_t sGpFrames[kNumGpPairs] = {};
+    uint32_t sGpPair = 0;
+    bool sGpArmed = false;          // counters set up and cleared for this frame
+    uint64_t sGpPeriodStartUs = 0;
+
+    void GpMetricsBeginFrame()
+    {
+        if (sGpPeriodStartUs == 0)
+        {
+            // The first frame: choose the first pair. The commands go through the FIFO, so they
+            // take effect by the next frame; counting starts then.
+            GX_SetGPMetric(kGpPairs[sGpPair].mPerf0, kGpPairs[sGpPair].mPerf1);
+            GX_Flush();
+            sGpPeriodStartUs = SYS_GetTimeMicroseconds();
+            return;
+        }
+
+        GX_ClearGPMetric();
+        sGpArmed = true;
+    }
+
+    // After GX_DrawDone: the GPU has finished the frame, so the counts are complete.
+    void GpMetricsEndFrame()
+    {
+        if (!sGpArmed)
+        {
+            return;
+        }
+        sGpArmed = false;
+
+        u32 c0 = 0, c1 = 0;
+        GX_ReadGPMetric(&c0, &c1);
+        sGpSum[sGpPair][0] += c0;
+        sGpSum[sGpPair][1] += c1;
+        sGpFrames[sGpPair]++;
+
+        // The next pair, for the next frame.
+        sGpPair = (sGpPair + 1) % kNumGpPairs;
+        GX_SetGPMetric(kGpPairs[sGpPair].mPerf0, kGpPairs[sGpPair].mPerf1);
+        GX_Flush();
+
+        const uint64_t nowUs = SYS_GetTimeMicroseconds();
+        if (nowUs - sGpPeriodStartUs < 5000000)
+        {
+            return;
+        }
+        sGpPeriodStartUs = nowUs;
+
+        char line[500];
+        int at = snprintf(line, sizeof(line), "GPU");
+        for (uint32_t p = 0; p < kNumGpPairs; ++p)
+        {
+            for (uint32_t k = 0; k < 2; ++k)
+            {
+                const GpMetricPair& pair = kGpPairs[p];
+                const char* name = k ? pair.mName1 : pair.mName0;
+                const bool clocks = k ? pair.mClocks1 : pair.mClocks0;
+                const double avg = sGpFrames[p] ? sGpSum[p][k] / sGpFrames[p] : 0.0;
+                if (at < int(sizeof(line)) - 32)
+                {
+                    at += clocks ? snprintf(line + at, sizeof(line) - at, " %s=%.1fms", name, avg / kGpClocksPerMs)
+                                 : snprintf(line + at, sizeof(line) - at, " %s=%.0fK", name, avg / 1000.0);
+                }
+                sGpSum[p][k] = 0.0;
+            }
+            sGpFrames[p] = 0;
+        }
+        OctLog("%s", line);
+    }
+}
+#endif
 
 void GFX_Initialize()
 {
@@ -99,6 +216,10 @@ void GFX_Shutdown()
 
 void GFX_BeginFrame()
 {
+#if PROFILING_ENABLED
+    GpMetricsBeginFrame();
+#endif
+
     gGxContext.mWorld = Renderer::Get()->GetCurrentWorld();
 
     GXRModeObj* rmode = &GetEngineState()->mSystem.mGxRmode;
@@ -155,11 +276,22 @@ void GFX_EndFrame()
     GX_SetColorUpdate(GX_TRUE);
     GX_SetAlphaUpdate(GX_TRUE);
     GX_CopyDisp(systemState->mFrameBuffers[systemState->mFrameIndex], GX_TRUE);
-    GX_DrawDone();
+    {
+        // How long the CPU waits for the GPU to finish the frame, apart from the wait for the retrace.
+        SCOPED_FRAME_STAT("GpuWait");
+        GX_DrawDone();
+    }
+
+#if PROFILING_ENABLED
+    GpMetricsEndFrame();
+#endif
 
     VIDEO_SetNextFramebuffer(systemState->mFrameBuffers[systemState->mFrameIndex]);
     VIDEO_Flush();
-    VIDEO_WaitVSync();
+    {
+        SCOPED_FRAME_STAT("RetraceWait");
+        VIDEO_WaitVSync();
+    }
 }
 
 void GFX_BeginScreen(uint32_t screenIndex)
