@@ -953,11 +953,11 @@ Asset* AssetManager::LoadAsset(AssetStub& stub)
     return stub.mAsset;
 }
 
-void AssetManager::EnableLoadProgressPump(bool enable)
+void AssetManager::EnableLoadProgressPump(bool enable, bool restart)
 {
     mLoadPumpEnabled = enable;
 
-    if (enable)
+    if (enable && restart)
     {
         mLoadPumpCount = 0;
     }

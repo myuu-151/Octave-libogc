@@ -65,6 +65,18 @@ int Renderer_Lua::EnableConsole(lua_State* L)
     return 0;
 }
 
+// Renderer.ShowLoadingProgress(on): the engine's boot loading screen up again (on) and its bar
+// carrying on from where the boot's left it, moved by the assets the game loads -- or down (off).
+// For a game that loads a great deal on its first tick, after the scene: without it the screen
+// sat on the boot's last frame, the bar one step in, until the game was ready.
+int Renderer_Lua::ShowLoadingProgress(lua_State* L)
+{
+    bool on = CHECK_BOOLEAN(L, 1);
+    Renderer::Get()->EnableLoadingScreen(on);
+    AssetManager::Get()->EnableLoadProgressPump(on, false);
+    return 0;
+}
+
 int Renderer_Lua::DirtyAllWidgets(lua_State* L)
 {
     Renderer::Get()->DirtyAllWidgets();
@@ -377,6 +389,8 @@ void Renderer_Lua::Bind()
     REGISTER_TABLE_FUNC(L, tableIdx, EnableConsole);
 
     REGISTER_TABLE_FUNC(L, tableIdx, DirtyAllWidgets);
+
+    REGISTER_TABLE_FUNC(L, tableIdx, ShowLoadingProgress);
 
     REGISTER_TABLE_FUNC(L, tableIdx, GetFrameNumber);
 

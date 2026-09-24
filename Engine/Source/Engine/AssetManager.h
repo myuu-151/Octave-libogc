@@ -157,7 +157,8 @@ public:
     // While this is on, loading an asset from disc occasionally draws a frame, so the loading
     // screen is updated during a blocking load instead of the screen sitting black through it.
     // Startup turns it on around the scene load and off again once the scene is up.
-    void EnableLoadProgressPump(bool enable);
+    // restart: the bar starts again from empty (false: it carries on from where the last pump left it)
+    void EnableLoadProgressPump(bool enable, bool restart = true);
 
 protected:
 
