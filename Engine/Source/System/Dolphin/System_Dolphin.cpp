@@ -1151,29 +1151,49 @@ static void MountMemoryCard()
 }
 
 // What the memory card's own menu shows for a save: a 32-character title and a 32-character
-// description, and a 32 x 32 RGB5A3 icon (GX's 4 x 4 tiles, big-endian). Set by the game with
+// description, a 32 x 32 RGB5A3 icon (GX's 4 x 4 tiles, big-endian) and, if given, a 96 x 32
+// banner in CI8 (GX's 8 x 4 tiles) followed by its 256-colour RGB5A3 palette. Set by the game with
 // System.SetSaveInfo; with no icon set, saves are written as they always were, bare.
 #define SAVE_COMMENT_SIZE 64
 #define SAVE_ICON_SIZE (CARD_ICON_W * CARD_ICON_H * 2)
+#define SAVE_BANNER_SIZE (CARD_BANNER_W * CARD_BANNER_H + 256 * 2)
 static char sSaveComment[SAVE_COMMENT_SIZE] = {};
 static uint8_t sSaveIcon[SAVE_ICON_SIZE] = {};
+static uint8_t sSaveBanner[SAVE_BANNER_SIZE] = {};
 static bool sSaveInfoSet = false;
+static bool sSaveBannerSet = false;
 
-void SYS_SetSaveInfo(const char* title, const char* description, const uint8_t* iconRGB5A3)
+void SYS_SetSaveInfo(const char* title, const char* description, const uint8_t* iconRGB5A3, const uint8_t* bannerCI8)
 {
     memset(sSaveComment, 0, sizeof(sSaveComment));
     strncpy(sSaveComment, title, 31);
     strncpy(sSaveComment + 32, description, 31);
     memcpy(sSaveIcon, iconRGB5A3, SAVE_ICON_SIZE);
+    sSaveBannerSet = (bannerCI8 != nullptr);
+    if (sSaveBannerSet)
+    {
+        memcpy(sSaveBanner, bannerCI8, SAVE_BANNER_SIZE);
+    }
     sSaveInfoSet = true;
 }
 
-// A save's file, in whole blocks. With save info: the comment at 0, the icon at 64, the data
-// after them at 2112 -- the card's menu only takes an icon that starts in the file's first 512
-// bytes (libogc refuses the status otherwise). Without: the data at 0, as saves always were.
-// Reading tells the two apart by the file's icon address (SaveDataOffset), so a save written
-// before there was an icon still reads back.
-#define SAVE_INFO_SIZE (SAVE_COMMENT_SIZE + SAVE_ICON_SIZE)
+// A save's file, in whole blocks. With save info: the comment at 0, the pictures from 64 -- the
+// banner and its palette first, if there is one, then the icon, as the card's menu reads them --
+// and the data after them: at 5696 with a banner, 2112 without. The pictures must start in the
+// file's first 512 bytes (libogc refuses the status otherwise). Without save info: the data at 0,
+// as saves always were. Reading tells them apart by the file's picture address and banner format
+// (SaveDataOffset), so a save written before there was an icon, or a banner, still reads back.
+#define SAVE_INFO_SIZE_NO_BANNER (SAVE_COMMENT_SIZE + SAVE_ICON_SIZE)
+#define SAVE_INFO_SIZE_BANNER (SAVE_COMMENT_SIZE + SAVE_BANNER_SIZE + SAVE_ICON_SIZE)
+
+static uint32_t SaveInfoSize()
+{
+    if (!sSaveInfoSet)
+    {
+        return 0;
+    }
+    return sSaveBannerSet ? SAVE_INFO_SIZE_BANNER : SAVE_INFO_SIZE_NO_BANNER;
+}
 
 static uint32_t SaveDataOffset(int32_t fileNo)
 {
@@ -1181,14 +1201,14 @@ static uint32_t SaveDataOffset(int32_t fileNo)
     if (CARD_GetStatus(CARD_SLOTA, fileNo, &stat) >= 0 &&
         stat.icon_addr == SAVE_COMMENT_SIZE && stat.comment_addr == 0)
     {
-        return SAVE_INFO_SIZE;
+        return (CARD_GetBannerFmt(&stat) == CARD_BANNER_CI) ? SAVE_INFO_SIZE_BANNER : SAVE_INFO_SIZE_NO_BANNER;
     }
     return 0;
 }
 
 static uint32_t SaveFileSize(uint32_t dataBytes, uint32_t sectorSize)
 {
-    uint32_t bytes = dataBytes + (sSaveInfoSet ? SAVE_INFO_SIZE : 0);
+    uint32_t bytes = dataBytes + SaveInfoSize();
     return ((bytes + sectorSize - 1) / sectorSize) * sectorSize;
 }
 
@@ -1401,14 +1421,20 @@ bool SYS_WriteSave(const char* saveName, Stream& stream)
 
             //LogDebug("fileSize = %d, cardFile.len = %d, stream.GetSize() = %d", fileSize, cardFile.len, stream.GetSize());
             //OCT_ASSERT(fileSize == cardFile.len);
-            OCT_ASSERT(fileSize >= (int32_t)(stream.GetSize() + (sSaveInfoSet ? SAVE_INFO_SIZE : 0)));
+            OCT_ASSERT(fileSize >= (int32_t)(stream.GetSize() + SaveInfoSize()));
             memset(cardBuffer, 0, fileSize);
             uint32_t commentAt = 0;
-            uint32_t iconAt = SAVE_COMMENT_SIZE;
-            uint32_t dataAt = sSaveInfoSet ? SAVE_INFO_SIZE : 0;
+            uint32_t picturesAt = SAVE_COMMENT_SIZE;
+            uint32_t bannerAt = picturesAt;
+            uint32_t iconAt = picturesAt + (sSaveBannerSet ? SAVE_BANNER_SIZE : 0);
+            uint32_t dataAt = SaveInfoSize();
             if (sSaveInfoSet)
             {
                 memcpy(cardBuffer + commentAt, sSaveComment, SAVE_COMMENT_SIZE);
+                if (sSaveBannerSet)
+                {
+                    memcpy(cardBuffer + bannerAt, sSaveBanner, SAVE_BANNER_SIZE);
+                }
                 memcpy(cardBuffer + iconAt, sSaveIcon, SAVE_ICON_SIZE);
             }
             memcpy(cardBuffer + dataAt, stream.GetData(), stream.GetSize());
@@ -1422,13 +1448,15 @@ bool SYS_WriteSave(const char* saveName, Stream& stream)
             }
             else if (sSaveInfoSet)
             {
-                // Where the card's menu finds the name and the picture: one still icon, RGB5A3,
-                // no banner. (libogc's CARD_SetIconSpeed macro reads icon_fmt; set it directly.)
+                // Where the card's menu finds the name and the pictures: the banner (CI8, its
+                // palette right after it) if there is one, then one still icon, RGB5A3. The card
+                // finds both from the one address. (libogc's CARD_SetIconSpeed macro reads
+                // icon_fmt; set it directly.)
                 card_stat stat;
                 if (CARD_GetStatus(CARD_SLOTA, cardFile.filenum, &stat) >= 0)
                 {
-                    stat.banner_fmt = CARD_BANNER_NONE;
-                    stat.icon_addr = iconAt;
+                    stat.banner_fmt = sSaveBannerSet ? CARD_BANNER_CI : CARD_BANNER_NONE;
+                    stat.icon_addr = picturesAt;
                     stat.icon_fmt = CARD_ICON_RGB;
                     stat.icon_speed = CARD_SPEED_SLOW;
                     stat.comment_addr = commentAt;

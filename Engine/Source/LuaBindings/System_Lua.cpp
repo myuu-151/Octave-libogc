@@ -139,16 +139,26 @@ int System_Lua::GetFreeMemory(lua_State* L)
 extern "C" const char* OctSd_GetModeName(int chan);
 #endif
 
-// System.SetSaveInfo(title, description, iconHex) -- what the GameCube's memory card menu shows
-// for the game's saves: a title and a description, 31 characters each, and a 32 x 32 icon given
-// as 4096 hex digits, the 2048 bytes of an RGB5A3 texture in GX's tile order. Saves written
-// after this carry them. Does nothing on other platforms.
+// System.SetSaveInfo(title, description, iconHex [, bannerHex]) -- what the GameCube's memory
+// card menu shows for the game's saves: a title and a description, 31 characters each, a 32 x 32
+// icon given as 4096 hex digits, the 2048 bytes of an RGB5A3 texture in GX's tile order, and
+// optionally a 96 x 32 banner as 7168 hex digits: 3072 bytes of CI8 in GX's tile order, then its
+// 256-colour RGB5A3 palette. Saves written after this carry them. Does nothing on other platforms.
 //
 // System.GetSaveCard(saveName, dataBytes) -> state, blocksNeeded, blocksFree
 // Whether a save of that size can be written to slot A's card; see SYS_GetSaveCardState for the
 // states. "none" on platforms without memory cards.
 #if PLATFORM_GAMECUBE
-void SYS_SetSaveInfo(const char* title, const char* description, const uint8_t* iconRGB5A3);
+void SYS_SetSaveInfo(const char* title, const char* description, const uint8_t* iconRGB5A3, const uint8_t* bannerCI8);
+
+static void HexToBytes(const char* hex, uint8_t* out, size_t count)
+{
+    for (size_t i = 0; i < count; ++i)
+    {
+        char pair[3] = { hex[i * 2], hex[i * 2 + 1], 0 };
+        out[i] = (uint8_t)strtoul(pair, nullptr, 16);
+    }
+}
 const char* SYS_GetSaveCardState(const char* saveName, uint32_t dataBytes, int32_t& blocksNeeded, int32_t& blocksFree);
 #endif
 
@@ -158,20 +168,27 @@ int System_Lua::SetSaveInfo(lua_State* L)
     const char* description = CHECK_STRING(L, 2);
     size_t hexLen = 0;
     const char* hex = luaL_checklstring(L, 3, &hexLen);
+    size_t bannerLen = 0;
+    const char* bannerHex = lua_isstring(L, 4) ? lua_tolstring(L, 4, &bannerLen) : nullptr;
 #if PLATFORM_GAMECUBE
     uint8_t icon[32 * 32 * 2];
     if (hexLen != sizeof(icon) * 2)
     {
         return luaL_error(L, "SetSaveInfo: the icon must be %d hex digits", (int)sizeof(icon) * 2);
     }
-    for (size_t i = 0; i < sizeof(icon); ++i)
+    HexToBytes(hex, icon, sizeof(icon));
+    static uint8_t banner[96 * 32 + 256 * 2];
+    if (bannerHex != nullptr && bannerLen != sizeof(banner) * 2)
     {
-        char pair[3] = { hex[i * 2], hex[i * 2 + 1], 0 };
-        icon[i] = (uint8_t)strtoul(pair, nullptr, 16);
+        return luaL_error(L, "SetSaveInfo: the banner must be %d hex digits", (int)sizeof(banner) * 2);
     }
-    SYS_SetSaveInfo(title, description, icon);
+    if (bannerHex != nullptr)
+    {
+        HexToBytes(bannerHex, banner, sizeof(banner));
+    }
+    SYS_SetSaveInfo(title, description, icon, bannerHex != nullptr ? banner : nullptr);
 #else
-    (void)title; (void)description; (void)hex; (void)hexLen;
+    (void)title; (void)description; (void)hex; (void)hexLen; (void)bannerHex; (void)bannerLen;
 #endif
     return 0;
 }
