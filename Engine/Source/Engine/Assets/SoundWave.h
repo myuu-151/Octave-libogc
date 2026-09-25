@@ -33,6 +33,11 @@ public:
     void SetAudioClass(int8_t audioClass);
     int8_t GetAudioClass() const;
 
+    // How many copies of this sound may play at once; 0 (the default) is any number. Playing one
+    // more stops the oldest (AudioManager), so 1 makes a sound cut itself off.
+    void SetMaxInstances(uint8_t maxInstances) { mMaxInstances = maxInstances; }
+    uint8_t GetMaxInstances() const { return mMaxInstances; }
+
     uint8_t* GetWaveData() const;
     uint32_t GetWaveDataSize() const;
     uint32_t GetNumChannels() const;
@@ -54,6 +59,11 @@ public:
     uint32_t GetDiscOffset() const { return mDiscOffset; }
     uint32_t GetDiscSize() const { return mDiscSize; }
 
+    // GameCube: the PCM moved to ARAM (see Audio_Dolphin.cpp), at this ARAM address; 0 while it
+    // is in main memory. GetWaveData() is null once it has moved; GetWaveDataSize() still holds.
+    uint32_t GetAramAddress() const { return mAramAddress; }
+    void MoveWaveDataToAram(uint32_t aramAddress);
+
 protected:
 
     static bool HandlePropChange(Datum* datum, uint32_t index, const void* newValue);
@@ -68,6 +78,8 @@ protected:
     uint32_t mDiscOffset = 0;
     uint32_t mDiscSize = 0;
 
+    uint32_t mAramAddress = 0;
+
     // Properties
     float mVolumeMultiplier = 1.0f;
     float mPitchMultiplier = 1.0f;
@@ -75,6 +87,7 @@ protected:
     bool mCompress = false;
     bool mCompressInternal = false;
     bool mStream = false;   // Stream-decode compressed audio on console (music)
+    uint8_t mMaxInstances = 0;  // copies playing at once; 0 is any number
 
     // Soundwave Format
     uint32_t mNumChannels = 1;

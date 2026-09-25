@@ -35,6 +35,7 @@ struct AudioSource
     float mOuterRadius;
     AttenuationFunc mAttenuationFunc;
     int8_t mAudioClass;
+    uint32_t mStartOrder;   // when it started, for a sound's max instances (the oldest goes first)
 
     AudioSource()
     {
@@ -77,6 +78,7 @@ struct AudioSource
         mOuterRadius = -1.0f;
         mAttenuationFunc = AttenuationFunc::Count;
         mAudioClass = 0;
+        mStartOrder = 0;
     }
 
     bool IsSpatial() const
@@ -88,6 +90,7 @@ struct AudioSource
 static AudioClassData sAudioClassData[MAX_AUDIO_CLASSES];
 static AudioSource sAudioSources[MAX_AUDIO_SOURCES];
 static float sMasterVolume = 1.0f;
+static uint32_t sStartOrder = 0;
 static float sMasterPitch = 1.0f;
 
 float CalcVolumeAttenuation(AttenuationFunc func, float innerRadius, float outerRadius, float distance)
@@ -190,6 +193,7 @@ void PlayAudio(
         outerRadius,
         attenFunc,
         audioClass);
+    sAudioSources[sourceIndex].mStartOrder = ++sStartOrder;
 
     float classVolume = sAudioClassData[audioClass].mVolume;
     float classPitch = sAudioClassData[audioClass].mPitch;
@@ -224,6 +228,33 @@ void StopAudio(uint32_t sourceIndex)
     AUD_Stop(sourceIndex);
 
     sAudioSources[sourceIndex].Reset();
+}
+
+// A SoundWave's Max Instances (0: any number): before one more copy of it starts, the oldest copies
+// playing are stopped until there is room, so a sound limited to 1 cuts itself off each time it is
+// played again. The default lets a sound ring over itself; it is the game's choice, per sound.
+void MakeRoomForInstance(SoundWave* soundWave)
+{
+    const uint32_t maxInstances = (soundWave != nullptr) ? soundWave->GetMaxInstances() : 0;
+    if (maxInstances == 0)
+        return;
+
+    while (true)
+    {
+        uint32_t playing = 0;
+        uint32_t oldest = MAX_AUDIO_SOURCES;
+        for (uint32_t i = 0; i < MAX_AUDIO_SOURCES; ++i)
+        {
+            if (sAudioSources[i].mSoundWave.Get() != soundWave)
+                continue;
+            ++playing;
+            if (oldest == MAX_AUDIO_SOURCES || sAudioSources[i].mStartOrder < sAudioSources[oldest].mStartOrder)
+                oldest = i;
+        }
+        if (playing < maxInstances || oldest == MAX_AUDIO_SOURCES)
+            return;
+        StopAudio(oldest);
+    }
 }
 
 uint32_t FindAvailableAudioSourceIndex(int32_t inPriority)
@@ -410,6 +441,7 @@ void AudioManager::Update(float deltaTime)
                 if (dist < outerRadius)
                 {
                     // It should be audible, so attempt to add it as a sound source.
+                    MakeRoomForInstance(node->GetSoundWave());
                     uint32_t sourceIndex = FindAvailableAudioSourceIndex(node->GetPriority());
 
                     float soundDuration = node->GetSoundWave()->GetDuration();
@@ -450,6 +482,7 @@ void AudioManager::PlaySound2D(
     bool loop,
     int32_t priority)
 {
+    MakeRoomForInstance(soundWave);
     uint32_t sourceIndex = FindAvailableAudioSourceIndex(priority);
 
     if (soundWave != nullptr && 
@@ -484,6 +517,7 @@ void AudioManager::PlaySound3D(
     bool loop,
     int32_t priority)
 {
+    MakeRoomForInstance(soundWave);
     uint32_t sourceIndex = FindAvailableAudioSourceIndex(priority);
 
     if (soundWave != nullptr && 

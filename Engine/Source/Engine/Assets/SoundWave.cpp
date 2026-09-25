@@ -69,8 +69,10 @@ int32_t SoundWave::GetFileReadLimit(const char* path)
     std::string name;
     head.ReadString(name);
 
-    // volume, pitch, class, compress, compress internal, stream, six format words, compressed, size
-    const uint32_t need = 4 + 4 + 1 + 3 + 6 * 4 + 1 + 4;
+    // volume, pitch, class, compress, compress internal, stream, (max instances,) six format words,
+    // compressed, size
+    const bool maxInstances = (header.mVersion >= ASSET_VERSION_SOUND_MAX_INSTANCES);
+    const uint32_t need = 4 + 4 + 1 + 3 + (maxInstances ? 1 : 0) + 6 * 4 + 1 + 4;
     if (header.mVersion < ASSET_VERSION_SOUND_STREAM || head.GetPos() + need > head.GetSize())
     {
         return 0;
@@ -82,6 +84,10 @@ int32_t SoundWave::GetFileReadLimit(const char* path)
     head.ReadBool();
     head.ReadBool();
     bool streamed = head.ReadBool();
+    if (maxInstances)
+    {
+        head.ReadUint8();
+    }
     for (uint32_t i = 0; i < 6; ++i)
     {
         head.ReadUint32();
@@ -116,6 +122,10 @@ void SoundWave::LoadStream(Stream& stream, Platform platform)
     if (stream.GetAssetVersion() >= ASSET_VERSION_SOUND_STREAM)
     {
         mStream = stream.ReadBool();
+    }
+    if (stream.GetAssetVersion() >= ASSET_VERSION_SOUND_MAX_INSTANCES)
+    {
+        mMaxInstances = stream.ReadUint8();
     }
 
     // Waveform Format
@@ -215,6 +225,7 @@ void SoundWave::SaveStream(Stream& stream, Platform platform)
     stream.WriteBool(mCompress);
     stream.WriteBool(mCompressInternal);
     stream.WriteBool(mStream);
+    stream.WriteUint8(mMaxInstances);
 
     uint32_t numChannels = mNumChannels;
     uint32_t bitsPerSample = mBitsPerSample;
@@ -400,6 +411,16 @@ void SoundWave::Destroy()
         mWaveData = nullptr;
     }
 
+#if PLATFORM_GAMECUBE
+    if (mAramAddress != 0)
+    {
+        // Stopped first: a playing voice reads its next buffer from this ARAM.
+        AudioManager::StopSounds(this);
+        AUD_FreeAram(mAramAddress);
+        mAramAddress = 0;
+    }
+#endif
+
     if (mCompressedData != nullptr)
     {
 #if !EDITOR
@@ -495,6 +516,7 @@ void SoundWave::GatherProperties(std::vector<Property>& outProps)
     outProps.push_back(Property(DatumType::Bool, "Compress", this, &mCompress, 1, HandlePropChange));
     outProps.push_back(Property(DatumType::Bool, "Compress Internal", this, &mCompressInternal, 1, HandlePropChange));
     outProps.push_back(Property(DatumType::Bool, "Stream", this, &mStream, 1, HandlePropChange));
+    outProps.push_back(Property(DatumType::Byte, "Max Instances", this, &mMaxInstances, 1, HandlePropChange));
 }
 
 glm::vec4 SoundWave::GetTypeColor()
@@ -553,6 +575,16 @@ void SoundWave::SetPcmData(uint8_t* data, uint32_t size, uint32_t numSamples, ui
 float SoundWave::GetVolumeMultiplier() const
 {
     return mVolumeMultiplier;
+}
+
+void SoundWave::MoveWaveDataToAram(uint32_t aramAddress)
+{
+    if (mWaveData != nullptr)
+    {
+        AUD_FreeWaveBuffer(mWaveData);
+        mWaveData = nullptr;
+    }
+    mAramAddress = aramAddress;
 }
 
 uint8_t* SoundWave::GetWaveData() const

@@ -431,10 +431,266 @@ static void PcmFeed(PcmStream& s)
     }
 }
 
+// ---------------------------------------------------------------------------
+// ARAM sound effects (GameCube)
+//
+// The GameCube has 16 MB of ARAM beside its 24 MB of main memory, reachable only by DMA. A sound
+// effect's PCM moves there when it loads (AUD_ProcessWaveBuffer) and its main-memory copy is
+// freed: in Sonic Pipe Dream that is ~780 KB of main memory back, for 128 KB of voice buffers.
+//
+// libasnd plays from main memory, so a voice playing an ARAM sound has two 8 KB buffers: the
+// first is read from ARAM when it starts, and each time libasnd takes the queued buffer it calls
+// AramVoiceCallback (from the audio interrupt), which reads the next 8 KB into the free one and
+// queues it. Nothing waits on the main thread, so a long frame cannot starve a sound.
+//
+// Every ARAM transfer runs with interrupts off, in pieces of at most 8 KB (tens of
+// microseconds): a loader thread's upload and the interrupt's reads never meet, and libogc's
+// AR_StartDMA is never called while a transfer is running.
+// ---------------------------------------------------------------------------
+#if PLATFORM_GAMECUBE
+
+#include <ogc/aram.h>
+#include <ogc/mutex.h>
+#include <ogc/machine/processor.h>
+
+static const uint32_t kAramVoiceBuf = 8 * 1024;    // over one ASND mix block (4 KB) at any format
+static const uint32_t kAramDmaPiece = 8 * 1024;
+static const uint32_t kAramMaxBlocks = 256;
+
+struct AramBlock
+{
+    uint32_t at;
+    uint32_t size;
+    bool     used;
+};
+
+static bool      sAramReady = false;
+static uint32_t  sAramTotal = 0;
+static AramBlock sAramBlocks[kAramMaxBlocks];     // address order, covering the user area
+static uint32_t  sAramNumBlocks = 0;
+static uint32_t  sAramSoundBytes = 0;
+static mutex_t   sAramMutex = LWP_MUTEX_NULL;
+
+struct AramVoice
+{
+    volatile bool active = false;
+    uint32_t aram = 0;
+    uint32_t size = 0;
+    uint32_t pos = 0;           // bytes handed to ASND so far
+    bool     loop = false;
+    uint8_t* buf[2] = { nullptr, nullptr };
+    int      next = 0;          // the buffer to fill next
+};
+
+static AramVoice sAramVoices[AUDIO_MAX_VOICES];
+
+// A transfer between main memory and ARAM, a piece at a time with interrupts off. Main memory
+// and ARAM addresses 32-byte aligned; the length is rounded up to 32.
+static void AramDma(uint32_t dir, void* mem, uint32_t aram, uint32_t len)
+{
+    len = (len + 31) & ~31u;
+    uint8_t* m = (uint8_t*)mem;
+    if (dir == AR_MRAMTOARAM) DCFlushRange(m, len);
+    else DCInvalidateRange(m, len);
+
+    for (uint32_t done = 0; done < len; done += kAramDmaPiece)
+    {
+        const uint32_t piece = glm::min(kAramDmaPiece, len - done);
+        uint32_t level;
+        _CPU_ISR_Disable(level);
+        AR_StartDMA(dir, (uint32_t)MEM_VIRTUAL_TO_PHYSICAL(m + done), aram + done, piece);
+        while (AR_GetDMAStatus()) {}
+        _CPU_ISR_Restore(level);
+    }
+}
+
+static void AramInit()
+{
+    const uint32_t base = AR_Init(nullptr, 0);   // the OS keeps the first 16 KB
+    sAramTotal = AR_GetSize();
+    if (sAramTotal <= base || LWP_MutexInit(&sAramMutex, false) != 0)
+    {
+        return;
+    }
+
+    for (AramVoice& v : sAramVoices)
+    {
+        v.buf[0] = (uint8_t*)memalign(32, kAramVoiceBuf);
+        v.buf[1] = (uint8_t*)memalign(32, kAramVoiceBuf);
+        if (v.buf[0] == nullptr || v.buf[1] == nullptr)
+        {
+            return;     // no ARAM sounds: they stay in main memory, as before
+        }
+    }
+
+    sAramBlocks[0] = { base, sAramTotal - base, false };
+    sAramNumBlocks = 1;
+    sAramReady = true;
+}
+
+// First fit, in 32-byte units. 0 if there is no room (the sound then stays in main memory).
+static uint32_t AramAlloc(uint32_t len)
+{
+    len = (len + 31) & ~31u;
+    uint32_t at = 0;
+    LWP_MutexLock(sAramMutex);
+    for (uint32_t i = 0; i < sAramNumBlocks; ++i)
+    {
+        AramBlock& b = sAramBlocks[i];
+        if (b.used || b.size < len)
+            continue;
+        if (b.size > len)
+        {
+            if (sAramNumBlocks == kAramMaxBlocks)
+                continue;   // no entry for the rest: take a block that fits exactly, or nothing
+            memmove(&sAramBlocks[i + 2], &sAramBlocks[i + 1], (sAramNumBlocks - i - 1) * sizeof(AramBlock));
+            sAramBlocks[i + 1] = { b.at + len, b.size - len, false };
+            ++sAramNumBlocks;
+            b.size = len;
+        }
+        b.used = true;
+        at = b.at;
+        sAramSoundBytes += len;
+        break;
+    }
+    LWP_MutexUnlock(sAramMutex);
+    return at;
+}
+
+void AUD_FreeAram(uint32_t aramAddress)
+{
+    if (!sAramReady || aramAddress == 0)
+        return;
+
+    LWP_MutexLock(sAramMutex);
+    for (uint32_t i = 0; i < sAramNumBlocks; ++i)
+    {
+        if (sAramBlocks[i].at != aramAddress || !sAramBlocks[i].used)
+            continue;
+        sAramBlocks[i].used = false;
+        sAramSoundBytes -= sAramBlocks[i].size;
+        // Join free neighbours, so the space comes back whole.
+        if (i + 1 < sAramNumBlocks && !sAramBlocks[i + 1].used)
+        {
+            sAramBlocks[i].size += sAramBlocks[i + 1].size;
+            memmove(&sAramBlocks[i + 1], &sAramBlocks[i + 2], (sAramNumBlocks - i - 2) * sizeof(AramBlock));
+            --sAramNumBlocks;
+        }
+        if (i > 0 && !sAramBlocks[i - 1].used)
+        {
+            sAramBlocks[i - 1].size += sAramBlocks[i].size;
+            memmove(&sAramBlocks[i], &sAramBlocks[i + 1], (sAramNumBlocks - i - 1) * sizeof(AramBlock));
+            --sAramNumBlocks;
+        }
+        break;
+    }
+    LWP_MutexUnlock(sAramMutex);
+}
+
+void AUD_GetAramStats(uint32_t& total, uint32_t& free, uint32_t& sounds)
+{
+    total = sAramReady ? sAramTotal : 0;
+    free = 0;
+    sounds = 0;
+    if (!sAramReady)
+        return;
+    LWP_MutexLock(sAramMutex);
+    for (uint32_t i = 0; i < sAramNumBlocks; ++i)
+    {
+        if (!sAramBlocks[i].used) free += sAramBlocks[i].size;
+    }
+    sounds = sAramSoundBytes;
+    LWP_MutexUnlock(sAramMutex);
+}
+
+// Reads the voice's next piece into its free buffer and queues it. Runs in the audio interrupt
+// (libasnd calls it while the voice has no buffer queued) and once from AramVoiceStart.
+static void AramVoiceCallback(s32 voice)
+{
+    if (voice < 0 || voice >= AUDIO_MAX_VOICES)
+        return;
+    AramVoice& v = sAramVoices[voice];
+    if (!v.active)
+        return;
+
+    if (v.pos >= v.size)
+    {
+        if (!v.loop)
+            return;     // played out: the voice runs dry and waits (AUD_IsPlaying is then false)
+        v.pos = 0;
+    }
+
+    if (ASND_TestVoiceBufferReady(voice) != 1 || ASND_TestPointer(voice, v.buf[v.next]) == SND_BUSY)
+        return;         // no room yet; libasnd calls again
+
+    const uint32_t n = glm::min(kAramVoiceBuf, v.size - v.pos);
+    AramDma(AR_ARAMTOMRAM, v.buf[v.next], v.aram + v.pos, n);
+    if (ASND_AddVoice(voice, v.buf[v.next], n) == SND_OK)
+    {
+        v.pos += n;
+        v.next ^= 1;
+    }
+}
+
+static void AramVoiceStop(uint32_t voice)
+{
+    if (voice < AUDIO_MAX_VOICES)
+        sAramVoices[voice].active = false;
+}
+
+static void AramVoiceStart(uint32_t voice, SoundWave* soundWave, int32_t format, int32_t pitchHz, int32_t volL, int32_t volR, bool loop)
+{
+    ASND_StopVoice(voice);
+
+    AramVoice& v = sAramVoices[voice];
+    v.active = false;
+    v.aram = soundWave->GetAramAddress();
+    v.size = soundWave->GetWaveDataSize();
+    v.loop = loop;
+
+    const uint32_t n = glm::min(kAramVoiceBuf, v.size);
+    AramDma(AR_ARAMTOMRAM, v.buf[0], v.aram, n);
+    v.pos = n;
+    v.next = 1;
+    v.active = true;
+
+    ASND_SetVoice(voice, format, pitchHz, 0, v.buf[0], n, volL, volR, AramVoiceCallback);
+
+    // Queue the second buffer now, not when the first runs out. Interrupts off: the callback
+    // may also run from the audio interrupt.
+    uint32_t level;
+    _CPU_ISR_Disable(level);
+    AramVoiceCallback(voice);
+    _CPU_ISR_Restore(level);
+}
+
+// A loaded sound effect's PCM moves to ARAM. Called on whichever thread loaded the sound.
+static void AramStoreWave(SoundWave* soundWave)
+{
+    if (!sAramReady || soundWave->GetStream() || soundWave->GetWaveData() == nullptr || soundWave->GetWaveDataSize() == 0)
+        return;
+
+    const uint32_t size = soundWave->GetWaveDataSize();
+    const uint32_t at = AramAlloc(size);
+    if (at == 0)
+    {
+        OctLog("ARAM full: '%s' (%u bytes) stays in main memory", soundWave->GetName().c_str(), size);
+        return;
+    }
+
+    AramDma(AR_MRAMTOARAM, soundWave->GetWaveData(), at, size);
+    soundWave->MoveWaveDataToAram(at);
+}
+
+#endif // PLATFORM_GAMECUBE
+
 void AUD_Initialize()
 {
     ASND_Init();
     ASND_Pause(0);
+#if PLATFORM_GAMECUBE
+    AramInit();
+#endif
 
     // At boot, so its stack sits low in a heap not yet cut up. 64 KB: an SD read goes through
     // libfat and the SD driver, and 16 KB overflowed on hardware (see SYS_CreateThread).
@@ -541,6 +797,10 @@ void AUD_Play(
     float startTime,
     bool spatial)
 {
+#if PLATFORM_GAMECUBE
+    AramVoiceStop(voiceIndex);      // whatever this voice played before
+#endif
+
     //float startPercent = startTime / soundWave->GetDuration();
     //startPercent = glm::clamp(startPercent, 0.0f, 1.0f);
     //uint32_t startingSample = uint32_t(startPercent * soundWave->GetNumSamples());
@@ -679,6 +939,15 @@ void AUD_Play(
         return;
     }
 
+#if PLATFORM_GAMECUBE
+    if (soundWave->GetAramAddress() != 0)
+    {
+        AramVoiceStart(voiceIndex, soundWave, voiceFormat, pitchHz,
+                       spatial ? 0 : volumeInt, spatial ? 0 : volumeInt, loop);
+        return;
+    }
+#endif
+
     if (loop)
     {
         ASND_SetInfiniteVoice(
@@ -708,6 +977,9 @@ void AUD_Play(
 
 void AUD_Stop(uint32_t voiceIndex)
 {
+#if PLATFORM_GAMECUBE
+    AramVoiceStop(voiceIndex);
+#endif
     ASND_StopVoice(voiceIndex);
 
     if (voiceIndex < AUDIO_MAX_VOICES)
@@ -716,8 +988,44 @@ void AUD_Stop(uint32_t voiceIndex)
     }
 }
 
+// Whether a voice fed buffer by buffer (a callback set) has played its last one. libasnd never
+// ends such a voice itself -- it clears a voice's state at its end only when it has NO callback --
+// so ASND_StatusVoice goes on saying SND_WORKING for ever. What does show the end: once the last
+// buffer runs out with nothing queued, the voice's current buffer is cleared, and ASND_TestPointer
+// finds none of its buffers in use.
+static bool VoiceDrained(uint32_t voice, uint8_t* const* bufs, int count)
+{
+    for (int b = 0; b < count; ++b)
+    {
+        if (bufs[b] != nullptr && ASND_TestPointer(voice, bufs[b]) == SND_BUSY)
+            return false;
+    }
+    return true;
+}
+
 bool AUD_IsPlaying(uint32_t voiceIndex)
 {
+    if (voiceIndex < AUDIO_MAX_VOICES)
+    {
+        // Played to the end: stopped here, or the voice would count as busy for ever and a sound
+        // played one at a time would never play again (measured on hardware: effects that
+        // played once and then no more).
+#if PLATFORM_GAMECUBE
+        AramVoice& av = sAramVoices[voiceIndex];
+        if (av.active && !av.loop && av.pos >= av.size && VoiceDrained(voiceIndex, av.buf, 2))
+        {
+            AUD_Stop(voiceIndex);
+            return false;
+        }
+#endif
+        StreamVoice* sv = &sStreams[voiceIndex];
+        if (sv->active && sv->eof && sv->filled == 0 && VoiceDrained(voiceIndex, sv->buf, 3))
+        {
+            AUD_Stop(voiceIndex);
+            return false;
+        }
+    }
+
     int32_t status = ASND_StatusVoice(voiceIndex);
     return status == SND_WORKING;
 }
@@ -747,7 +1055,11 @@ void AUD_FreeWaveBuffer(void* buffer)
 
 void AUD_ProcessWaveBuffer(SoundWave* soundWave)
 {
-
+#if PLATFORM_GAMECUBE
+    AramStoreWave(soundWave);     // a sound effect's PCM moves to ARAM
+#else
+    (void)soundWave;
+#endif
 }
 
 uint32_t AUD_OpenStream(uint32_t sampleRate, uint32_t numChannels)

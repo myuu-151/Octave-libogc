@@ -20,6 +20,8 @@ struct SoundWave_Lua
     static int SetVolumeMultiplier(lua_State* L);
     static int GetPitchMultiplier(lua_State* L);
     static int SetPitchMultiplier(lua_State* L);
+    static int GetMaxInstances(lua_State* L);
+    static int SetMaxInstances(lua_State* L);
     static int GetWaveDataSize(lua_State* L);
     static int GetNumChannels(lua_State* L);
     static int GetBitsPerSample(lua_State* L);

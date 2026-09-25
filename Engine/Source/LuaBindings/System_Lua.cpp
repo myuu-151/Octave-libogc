@@ -140,6 +140,24 @@ int System_Lua::GetFreeMemory(lua_State* L)
     return 1;
 }
 
+// System.GetAramStats() -> total, free, sounds: on the GameCube, the bytes of ARAM, how many are
+// free, and how many hold sound effects (moved there from main memory as they load; see
+// Audio_Dolphin.cpp). 0, 0, 0 elsewhere.
+#if PLATFORM_GAMECUBE
+#include "Audio/Audio.h"
+#endif
+int System_Lua::GetAramStats(lua_State* L)
+{
+    uint32_t total = 0, free = 0, sounds = 0;
+#if PLATFORM_GAMECUBE
+    AUD_GetAramStats(total, free, sounds);
+#endif
+    lua_pushinteger(L, total);
+    lua_pushinteger(L, free);
+    lua_pushinteger(L, sounds);
+    return 3;
+}
+
 // System.PinBlocks(bytes): on the GameCube, freed blocks of this size (to an eighth over) are kept
 // for the next allocation of it and never given back to the heap (BigBlockCache_Dolphin.cpp) -- for
 // what is streamed in and out all the time at one size, a sky's frames. 0 stops. Nothing elsewhere.
@@ -405,6 +423,7 @@ void System_Lua::Bind()
     REGISTER_TABLE_FUNC(L, tableIdx, UnmountMemoryCard);
 
     REGISTER_TABLE_FUNC(L, tableIdx, GetFreeMemory);
+    REGISTER_TABLE_FUNC(L, tableIdx, GetAramStats);
     REGISTER_TABLE_FUNC(L, tableIdx, MemoryCensus);
     REGISTER_TABLE_FUNC(L, tableIdx, PinBlocks);
     REGISTER_TABLE_FUNC(L, tableIdx, GetStorageMode);

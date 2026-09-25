@@ -45,6 +45,26 @@ int SoundWave_Lua::SetPitchMultiplier(lua_State* L)
     return 0;
 }
 
+// sound:SetMaxInstances(n) / sound:GetMaxInstances(): how many copies may play at once; 0 (the
+// default) is any number, 1 makes each play cut the last one off. See AudioManager.
+int SoundWave_Lua::GetMaxInstances(lua_State* L)
+{
+    SoundWave* wave = CHECK_SOUND_WAVE(L, 1);
+
+    lua_pushinteger(L, (int)wave->GetMaxInstances());
+    return 1;
+}
+
+int SoundWave_Lua::SetMaxInstances(lua_State* L)
+{
+    SoundWave* wave = CHECK_SOUND_WAVE(L, 1);
+    int32_t value = (int32_t) CHECK_INTEGER(L, 2);
+
+    wave->SetMaxInstances((uint8_t)glm::clamp(value, 0, 255));
+
+    return 0;
+}
+
 int SoundWave_Lua::GetWaveDataSize(lua_State* L)
 {
     SoundWave* wave = CHECK_SOUND_WAVE(L, 1);
@@ -132,6 +152,10 @@ void SoundWave_Lua::Bind()
     REGISTER_TABLE_FUNC(L, mtIndex, GetPitchMultiplier);
 
     REGISTER_TABLE_FUNC(L, mtIndex, SetPitchMultiplier);
+
+    REGISTER_TABLE_FUNC(L, mtIndex, GetMaxInstances);
+
+    REGISTER_TABLE_FUNC(L, mtIndex, SetMaxInstances);
 
     REGISTER_TABLE_FUNC(L, mtIndex, GetWaveDataSize);
 
