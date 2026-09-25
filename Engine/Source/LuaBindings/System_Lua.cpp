@@ -247,15 +247,19 @@ extern "C" const char* OctSd_GetModeName(int chan);
 
 // System.SetSaveInfo(title, description, iconHex [, bannerHex]) -- what the GameCube's memory
 // card menu shows for the game's saves: a title and a description, 31 characters each, a 32 x 32
-// icon given as 4096 hex digits, the 2048 bytes of an RGB5A3 texture in GX's tile order, and
-// optionally a 96 x 32 banner as 7168 hex digits: 3072 bytes of CI8 in GX's tile order, then its
-// 256-colour RGB5A3 palette. Saves written after this carry them. Does nothing on other platforms.
+// icon, and optionally a 96 x 32 banner as 7168 hex digits: 3072 bytes of CI8 in GX's tile order,
+// then its 256-colour RGB5A3 palette. Saves written after this carry them. Does nothing on other
+// platforms. The icon is told by its length:
+//   - still: 4096 hex digits, the 2048 bytes of an RGB5A3 texture in GX's tile order
+//   - animated: 1 to 8 frames of CI8 (1024 bytes each, GX's 8 x 4 tiles), then the 256-colour
+//     RGB5A3 palette they share (512 bytes). The card's menu plays them in a loop. Each frame
+//     costs a kilobyte of the save, so seven push a save with a banner to two blocks.
 //
 // System.GetSaveCard(saveName, dataBytes) -> state, blocksNeeded, blocksFree
 // Whether a save of that size can be written to slot A's card; see SYS_GetSaveCardState for the
 // states. "none" on platforms without memory cards.
 #if PLATFORM_GAMECUBE
-void SYS_SetSaveInfo(const char* title, const char* description, const uint8_t* iconRGB5A3, const uint8_t* bannerCI8);
+void SYS_SetSaveInfo(const char* title, const char* description, const uint8_t* icon, uint32_t iconFrames, const uint8_t* bannerCI8);
 
 static void HexToBytes(const char* hex, uint8_t* out, size_t count)
 {
@@ -277,12 +281,22 @@ int System_Lua::SetSaveInfo(lua_State* L)
     size_t bannerLen = 0;
     const char* bannerHex = lua_isstring(L, 4) ? lua_tolstring(L, 4, &bannerLen) : nullptr;
 #if PLATFORM_GAMECUBE
-    uint8_t icon[32 * 32 * 2];
-    if (hexLen != sizeof(icon) * 2)
+    // still (RGB5A3, 2048 bytes): frames = 0; animated (n x 1024 CI8 + 512 palette): frames = n
+    static uint8_t icon[8 * 1024 + 512];
+    const size_t iconBytes = hexLen / 2;
+    uint32_t iconFrames = 0;
+    if (iconBytes != 2048)
     {
-        return luaL_error(L, "SetSaveInfo: the icon must be %d hex digits", (int)sizeof(icon) * 2);
+        const bool ci = (hexLen % 2) == 0 && iconBytes > 512 && ((iconBytes - 512) % 1024) == 0 &&
+                        (iconBytes - 512) / 1024 >= 1 && (iconBytes - 512) / 1024 <= 8;
+        if (!ci)
+        {
+            return luaL_error(L, "SetSaveInfo: the icon must be 4096 hex digits (RGB5A3) or 1-8 CI8 frames "
+                                 "and their palette (n x 2048 + 1024 hex digits)");
+        }
+        iconFrames = (uint32_t)((iconBytes - 512) / 1024);
     }
-    HexToBytes(hex, icon, sizeof(icon));
+    HexToBytes(hex, icon, iconBytes);
     static uint8_t banner[96 * 32 + 256 * 2];
     if (bannerHex != nullptr && bannerLen != sizeof(banner) * 2)
     {
@@ -292,7 +306,7 @@ int System_Lua::SetSaveInfo(lua_State* L)
     {
         HexToBytes(bannerHex, banner, sizeof(banner));
     }
-    SYS_SetSaveInfo(title, description, icon, bannerHex != nullptr ? banner : nullptr);
+    SYS_SetSaveInfo(title, description, icon, iconFrames, bannerHex != nullptr ? banner : nullptr);
 #else
     (void)title; (void)description; (void)hex; (void)hexLen; (void)bannerHex; (void)bannerLen;
 #endif

@@ -1289,24 +1289,33 @@ static void MountMemoryCard()
 }
 
 // What the memory card's own menu shows for a save: a 32-character title and a 32-character
-// description, a 32 x 32 RGB5A3 icon (GX's 4 x 4 tiles, big-endian) and, if given, a 96 x 32
-// banner in CI8 (GX's 8 x 4 tiles) followed by its 256-colour RGB5A3 palette. Set by the game with
+// description, an icon and, if given, a 96 x 32 banner in CI8 (GX's 8 x 4 tiles) followed by its
+// 256-colour RGB5A3 palette. The icon is either STILL -- 32 x 32 RGB5A3 (GX's 4 x 4 tiles,
+// big-endian), 2048 bytes -- or ANIMATED: 1 to 8 frames of 32 x 32 CI8 (1024 bytes each) followed
+// by the one RGB5A3 palette they share (512 bytes), played in a loop. Set by the game with
 // System.SetSaveInfo; with no icon set, saves are written as they always were, bare.
 #define SAVE_COMMENT_SIZE 64
-#define SAVE_ICON_SIZE (CARD_ICON_W * CARD_ICON_H * 2)
-#define SAVE_BANNER_SIZE (CARD_BANNER_W * CARD_BANNER_H + 256 * 2)
+#define SAVE_ICON_RGB_SIZE (CARD_ICON_W * CARD_ICON_H * 2)
+#define SAVE_ICON_CI_SIZE (CARD_ICON_W * CARD_ICON_H)
+#define SAVE_TLUT_SIZE (256 * 2)
+#define SAVE_BANNER_SIZE (CARD_BANNER_W * CARD_BANNER_H + SAVE_TLUT_SIZE)
 static char sSaveComment[SAVE_COMMENT_SIZE] = {};
-static uint8_t sSaveIcon[SAVE_ICON_SIZE] = {};
+static uint8_t sSaveIcon[CARD_MAXICONS * SAVE_ICON_CI_SIZE + SAVE_TLUT_SIZE] = {};
+static uint32_t sSaveIconSize = 0;
+static uint32_t sSaveIconFrames = 0;       // 0: one still RGB5A3 icon; n: n CI8 frames and a palette
 static uint8_t sSaveBanner[SAVE_BANNER_SIZE] = {};
 static bool sSaveInfoSet = false;
 static bool sSaveBannerSet = false;
 
-void SYS_SetSaveInfo(const char* title, const char* description, const uint8_t* iconRGB5A3, const uint8_t* bannerCI8)
+// iconFrames 0: icon is one RGB5A3 picture; 1-8: that many CI8 frames, then their palette.
+void SYS_SetSaveInfo(const char* title, const char* description, const uint8_t* icon, uint32_t iconFrames, const uint8_t* bannerCI8)
 {
     memset(sSaveComment, 0, sizeof(sSaveComment));
     strncpy(sSaveComment, title, 31);
     strncpy(sSaveComment + 32, description, 31);
-    memcpy(sSaveIcon, iconRGB5A3, SAVE_ICON_SIZE);
+    sSaveIconFrames = (iconFrames <= CARD_MAXICONS) ? iconFrames : CARD_MAXICONS;
+    sSaveIconSize = (sSaveIconFrames == 0) ? SAVE_ICON_RGB_SIZE : sSaveIconFrames * SAVE_ICON_CI_SIZE + SAVE_TLUT_SIZE;
+    memcpy(sSaveIcon, icon, sSaveIconSize);
     sSaveBannerSet = (bannerCI8 != nullptr);
     if (sSaveBannerSet)
     {
@@ -1316,32 +1325,45 @@ void SYS_SetSaveInfo(const char* title, const char* description, const uint8_t* 
 }
 
 // A save's file, in whole blocks. With save info: the comment at 0, the pictures from 64 -- the
-// banner and its palette first, if there is one, then the icon, as the card's menu reads them --
-// and the data after them: at 5696 with a banner, 2112 without. The pictures must start in the
-// file's first 512 bytes (libogc refuses the status otherwise). Without save info: the data at 0,
-// as saves always were. Reading tells them apart by the file's picture address and banner format
-// (SaveDataOffset), so a save written before there was an icon, or a banner, still reads back.
-#define SAVE_INFO_SIZE_NO_BANNER (SAVE_COMMENT_SIZE + SAVE_ICON_SIZE)
-#define SAVE_INFO_SIZE_BANNER (SAVE_COMMENT_SIZE + SAVE_BANNER_SIZE + SAVE_ICON_SIZE)
-
+// banner and its palette first, if there is one, then the icon's frames (and their palette), as
+// the card's menu reads them -- and the data after them. The pictures must start in the file's
+// first 512 bytes (libogc refuses the status otherwise). Without save info: the data at 0, as
+// saves always were. Reading works out where the data starts from the file's own picture formats
+// (SaveDataOffset), so a save with no icon, a still one or an animated one all read back.
 static uint32_t SaveInfoSize()
 {
     if (!sSaveInfoSet)
     {
         return 0;
     }
-    return sSaveBannerSet ? SAVE_INFO_SIZE_BANNER : SAVE_INFO_SIZE_NO_BANNER;
+    return SAVE_COMMENT_SIZE + (sSaveBannerSet ? SAVE_BANNER_SIZE : 0) + sSaveIconSize;
 }
 
 static uint32_t SaveDataOffset(int32_t fileNo)
 {
     card_stat stat;
-    if (CARD_GetStatus(CARD_SLOTA, fileNo, &stat) >= 0 &&
-        stat.icon_addr == SAVE_COMMENT_SIZE && stat.comment_addr == 0)
+    if (CARD_GetStatus(CARD_SLOTA, fileNo, &stat) < 0 ||
+        stat.icon_addr != SAVE_COMMENT_SIZE || stat.comment_addr != 0)
     {
-        return (CARD_GetBannerFmt(&stat) == CARD_BANNER_CI) ? SAVE_INFO_SIZE_BANNER : SAVE_INFO_SIZE_NO_BANNER;
+        return 0;                               // a bare save: the data from the start
     }
-    return 0;
+    uint32_t at = SAVE_COMMENT_SIZE;
+    const uint32_t bannerFmt = CARD_GetBannerFmt(&stat);
+    if (bannerFmt == CARD_BANNER_CI) at += SAVE_BANNER_SIZE;
+    else if (bannerFmt == CARD_BANNER_RGB) at += CARD_BANNER_W * CARD_BANNER_H * 2;
+    bool sharedTlut = false;
+    for (uint32_t n = 0; n < CARD_MAXICONS; ++n)
+    {
+        if (((stat.icon_speed >> (2 * n)) & CARD_SPEED_MASK) == CARD_SPEED_END)
+        {
+            break;                              // the animation's last frame was the one before
+        }
+        const uint32_t fmt = CARD_GetIconFmt(&stat, n);
+        if (fmt == CARD_ICON_RGB) at += SAVE_ICON_RGB_SIZE;
+        else if (fmt == CARD_ICON_CI) { at += SAVE_ICON_CI_SIZE; sharedTlut = true; }
+    }
+    if (sharedTlut) at += SAVE_TLUT_SIZE;
+    return at;
 }
 
 static uint32_t SaveFileSize(uint32_t dataBytes, uint32_t sectorSize)
@@ -1536,8 +1558,18 @@ bool SYS_WriteSave(const char* saveName, Stream& stream)
 
         if (cardError >= 0 && (int32_t)cardFile.len < fileSize)
         {
-            // Outgrown (an old save with no room for the icon, say): made again, bigger.
+            // Outgrown (an old save with no room for the icon, or a one-block save now that the
+            // icon is animated): made again, bigger -- but only if the card has the room. Deleted
+            // first and then not made, the save would be lost; left alone, it keeps what it had.
+            const int32_t have = (int32_t)cardFile.len;
             CARD_Close(&cardFile);
+            u16 freeBlocks = 0;
+            const int32_t more = (int32_t)((fileSize - have + (int32_t)sectorSize - 1) / (int32_t)sectorSize);
+            if (CARD_GetFreeBlocks(CARD_SLOTA, &freeBlocks) < 0 || (int32_t)freeBlocks < more)
+            {
+                LogError("Save %s needs %d more block(s) on the memory card; left as it was", saveName, (int)more);
+                return false;
+            }
             CARD_Delete(CARD_SLOTA, saveName);
             cardError = CARD_ERROR_NOFILE;
         }
@@ -1573,11 +1605,17 @@ bool SYS_WriteSave(const char* saveName, Stream& stream)
                 {
                     memcpy(cardBuffer + bannerAt, sSaveBanner, SAVE_BANNER_SIZE);
                 }
-                memcpy(cardBuffer + iconAt, sSaveIcon, SAVE_ICON_SIZE);
+                memcpy(cardBuffer + iconAt, sSaveIcon, sSaveIconSize);
             }
             memcpy(cardBuffer + dataAt, stream.GetData(), stream.GetSize());
 
-            cardError = CARD_Write(&cardFile, cardBuffer, fileSize, 0);
+            // A block at a time: given more than one, libogc's CARD_Write writes the first and
+            // reports success (measured in Dolphin: a two-block save came back with its second
+            // block blank).
+            for (int32_t at = 0; at < fileSize && cardError >= 0; at += (int32_t)sectorSize)
+            {
+                cardError = CARD_Write(&cardFile, cardBuffer + at, sectorSize, at);
+            }
             success = (cardError >= 0);
 
             if (cardError < 0)
@@ -1587,16 +1625,24 @@ bool SYS_WriteSave(const char* saveName, Stream& stream)
             else if (sSaveInfoSet)
             {
                 // Where the card's menu finds the name and the pictures: the banner (CI8, its
-                // palette right after it) if there is one, then one still icon, RGB5A3. The card
-                // finds both from the one address. (libogc's CARD_SetIconSpeed macro reads
-                // icon_fmt; set it directly.)
+                // palette right after it) if there is one, then the icon -- one still RGB5A3
+                // picture, or its CI8 frames and their shared palette, each frame shown for 12
+                // retraces (CARD_SPEED_SLOW) in a loop. The card finds them all from the one
+                // address. (libogc's CARD_SetIconSpeed macro reads icon_fmt; set it directly.)
                 card_stat stat;
                 if (CARD_GetStatus(CARD_SLOTA, cardFile.filenum, &stat) >= 0)
                 {
-                    stat.banner_fmt = sSaveBannerSet ? CARD_BANNER_CI : CARD_BANNER_NONE;
+                    stat.banner_fmt = (sSaveBannerSet ? CARD_BANNER_CI : CARD_BANNER_NONE) | CARD_ANIM_LOOP;
                     stat.icon_addr = picturesAt;
-                    stat.icon_fmt = CARD_ICON_RGB;
-                    stat.icon_speed = CARD_SPEED_SLOW;
+                    stat.icon_fmt = 0;
+                    stat.icon_speed = 0;
+                    const uint32_t frames = (sSaveIconFrames == 0) ? 1 : sSaveIconFrames;
+                    for (uint32_t n = 0; n < frames; ++n)
+                    {
+                        const uint32_t fmt = (sSaveIconFrames == 0) ? CARD_ICON_RGB : CARD_ICON_CI;
+                        stat.icon_fmt |= (u16)(fmt << (2 * n));
+                        stat.icon_speed |= (u16)(CARD_SPEED_SLOW << (2 * n));
+                    }
                     stat.comment_addr = commentAt;
                     int32_t statError = CARD_SetStatus(CARD_SLOTA, cardFile.filenum, &stat);
                     if (statError < 0)
