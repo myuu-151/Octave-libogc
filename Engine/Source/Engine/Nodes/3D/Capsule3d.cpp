@@ -1,4 +1,5 @@
 #include "Nodes/3D/Capsule3d.h"
+#include "EngineFeatures.h"
 
 #include "AssetManager.h"
 #include "Renderer.h"
@@ -111,8 +112,10 @@ void Capsule3D::Create()
 {
     Primitive3D::Create();
 
+#if OCT_PHYSICS
     btCapsuleShape* capsuleShape = new btCapsuleShape(mRadius, mHeight);
     SetCollisionShape(capsuleShape);
+#endif
 
     UpdateRigidBody();
 }
@@ -155,6 +158,7 @@ Bounds Capsule3D::GetLocalBounds() const
 
 void Capsule3D::UpdateRigidBody()
 {
+#if OCT_PHYSICS
     EnableRigidBody(false);
 
     btCapsuleShape* capsuleShape = static_cast<btCapsuleShape*>(mCollisionShape);
@@ -178,4 +182,6 @@ void Capsule3D::UpdateRigidBody()
     }
 
     EnableRigidBody(true);
+#endif
 }
+

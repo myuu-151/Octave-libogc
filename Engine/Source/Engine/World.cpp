@@ -1,4 +1,5 @@
 #include "World.h"
+#include "EngineFeatures.h"
 #include "Nodes/3D/Camera3d.h"
 #include "Constants.h"
 #include "Renderer.h"
@@ -34,13 +35,16 @@
 #include <BulletCollision/CollisionDispatch/btInternalEdgeUtility.h>
 #include <Bullet/BulletCollision/CollisionShapes/btTriangleShape.h>
 
+#if OCT_NAVIGATION
 #include "Recast.h"
 #include "DetourNavMesh.h"
 #include "DetourNavMeshBuilder.h"
 #include "DetourNavMeshQuery.h"
+#endif
 
 using namespace std;
 
+#if OCT_NAVIGATION
 namespace
 {
     struct RecastNavData
@@ -459,9 +463,17 @@ namespace
         return ok;
     }
 }
+#else
+namespace
+{
+    // (Built without navigation: EngineFeatures.h.)
+    static void InvalidateWorldNavCache(World*) {}
+}
+#endif
 
 std::unordered_set<NodePtrWeak> World::sNewlyRegisteredNodes;
 
+#if OCT_PHYSICS
 bool ContactAddedHandler(btManifoldPoint& cp,
     const btCollisionObjectWrapper* colObj0Wrap,
     int partId0,
@@ -496,6 +508,8 @@ bool ContactAddedHandler(btManifoldPoint& cp,
 #endif
 }
 
+#endif
+
 World::World() :
     mAmbientLightColor(DEFAULT_AMBIENT_LIGHT_COLOR),
     mShadowColor(DEFAULT_SHADOW_COLOR),
@@ -504,6 +518,7 @@ World::World() :
 {
     SCOPED_STAT("World()")
 
+#if OCT_PHYSICS
     // Setup physics world
 #if PLATFORM_DOLPHIN || PLATFORM_3DS
     // Bullet sets aside room for 4096 contact manifolds and 4096 collision algorithms up front:
@@ -523,6 +538,7 @@ World::World() :
     mDynamicsWorld->setGravity(btVector3(0, -10, 0));
 
     mDefaultDynamicsWorld = mDynamicsWorld;
+#endif
 }
 
 World::~World()
@@ -540,11 +556,13 @@ void World::Destroy()
 
     mDefaultDynamicsWorld = nullptr;
 
+#if OCT_PHYSICS
     delete mDynamicsWorld;
     delete mSolver;
     delete mBroadphase;
     delete mCollisionDispatcher;
     delete mCollisionConfig;
+#endif
 
     mDynamicsWorld = nullptr;
     mSolver = nullptr;
@@ -754,6 +772,7 @@ void World::GatherNodes(std::vector<Node*>& outNodes)
     }
 }
 
+#if OCT_NAVIGATION
 bool World::FindNavPath(glm::vec3 start, glm::vec3 end, std::vector<glm::vec3>& outPath)
 {
     outPath.clear();
@@ -871,6 +890,29 @@ void World::BuildNavigationData()
 {
     BuildWorldNav(this);
 }
+
+#else
+// Built without navigation (EngineFeatures.h): no path, no point.
+bool World::FindNavPath(glm::vec3, glm::vec3, std::vector<glm::vec3>& outPath)
+{
+    outPath.clear();
+    return false;
+}
+
+bool World::FindRandomNavPoint(glm::vec3&)
+{
+    return false;
+}
+
+bool World::FindClosestNavPoint(glm::vec3, glm::vec3&)
+{
+    return false;
+}
+
+void World::BuildNavigationData()
+{
+}
+#endif
 
 void World::EnableAutoNavRebuild(bool enable)
 {
@@ -1049,6 +1091,18 @@ void World::RayTest(glm::vec3 start, glm::vec3 end, uint8_t collisionMask, RayTe
     outResult.mStart = start;
     outResult.mEnd = end;
 
+#if OCT_PHYSICS
+    if (mDynamicsWorld == nullptr)
+#endif
+    {
+        // No physics (built without it, EngineFeatures.h): nothing is hit.
+        outResult.mHitPosition = end;
+        outResult.mHitNormal = {};
+        outResult.mHitFraction = 1.0f;
+        outResult.mHitNode = nullptr;
+        return;
+    }
+#if OCT_PHYSICS
     btVector3 fromWorld = btVector3(start.x, start.y, start.z);
     btVector3 toWorld = btVector3(end.x, end.y, end.z);
 
@@ -1074,6 +1128,7 @@ void World::RayTest(glm::vec3 start, glm::vec3 end, uint8_t collisionMask, RayTe
     {
         outResult.mHitNode = nullptr;
     }
+#endif
 }
 
 void World::RayTestMulti(glm::vec3 start, glm::vec3 end, uint8_t collisionMask, bool ignorePureOverlap, RayTestMultiResult& outResult)
@@ -1081,6 +1136,15 @@ void World::RayTestMulti(glm::vec3 start, glm::vec3 end, uint8_t collisionMask, 
     outResult.mStart = start;
     outResult.mEnd = end;
 
+#if OCT_PHYSICS
+    if (mDynamicsWorld == nullptr)
+#endif
+    {
+        // No physics (built without it, EngineFeatures.h): nothing is hit.
+        outResult.mNumHits = 0;
+        return;
+    }
+#if OCT_PHYSICS
     btVector3 fromWorld = btVector3(start.x, start.y, start.z);
     btVector3 toWorld = btVector3(end.x, end.y, end.z);
 
@@ -1102,6 +1166,7 @@ void World::RayTestMulti(glm::vec3 start, glm::vec3 end, uint8_t collisionMask, 
         outResult.mHitFractions.push_back(result.m_hitFractions[i]);
         outResult.mHitNodes.push_back(reinterpret_cast<Primitive3D*>(result.m_collisionObjects[i]->getUserPointer()));
     }
+#endif
 }
 
 void World::SweepTest(Primitive3D* primComp, glm::vec3 start, glm::vec3 end, uint8_t collisionMask, SweepTestResult& outResult)
@@ -1142,7 +1207,18 @@ void World::SweepTest(
     outResult.mStart = start;
     outResult.mEnd = end;
 
-
+#if OCT_PHYSICS
+    if (mDynamicsWorld == nullptr)
+#endif
+    {
+        // No physics (built without it, EngineFeatures.h): nothing is hit.
+        outResult.mHitPosition = end;
+        outResult.mHitNormal = {};
+        outResult.mHitFraction = 1.0f;
+        outResult.mHitNode = nullptr;
+        return;
+    }
+#if OCT_PHYSICS
     btVector3 startPos = btVector3(start.x, start.y, start.z);
     btVector3 endPos = btVector3(end.x, end.y, end.z);
     btQuaternion rot = btQuaternion(rotation.x, rotation.y, rotation.z, rotation.w);
@@ -1174,6 +1250,7 @@ void World::SweepTest(
     {
         outResult.mHitNode = nullptr;
     }
+#endif
 }
 
 void World::RegisterNode(Node* node, bool subRoot)
@@ -1323,6 +1400,7 @@ void World::Update(float deltaTime)
         }
     }
 
+#if OCT_PHYSICS
     if (gameTickEnabled)
     {
         SCOPED_FRAME_STAT("Physics");
@@ -1453,6 +1531,8 @@ void World::Update(float deltaTime)
             }
         }
     }
+
+#endif
 
     UpdateLines(deltaTime);
 
@@ -1788,12 +1868,18 @@ void World::QueueRootNode(Node* node)
 
 void World::EnableInternalEdgeSmoothing(bool enable)
 {
+#if OCT_PHYSICS
     gContactAddedCallback = enable ? ContactAddedHandler : nullptr;
+#endif
 }
 
 bool World::IsInternalEdgeSmoothingEnabled() const
 {
+#if OCT_PHYSICS
     return (gContactAddedCallback != nullptr);
+#else
+    return false;
+#endif
 }
 
 void World::DirtyAllWidgets()

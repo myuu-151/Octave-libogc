@@ -1,4 +1,5 @@
 #include "Renderer.h"
+#include "EngineFeatures.h"
 #include "AssetManager.h"
 #include "Utilities.h"
 #include "Engine.h"
@@ -619,6 +620,7 @@ void Renderer::LoadDefaultMeshes()
     // this->mCollisionShape at +0x68, so a null StaticMesh* faulted at address 0x68) --
     // skip the collision setup instead of dereferencing null. Package the project once
     // from the editor so the engine .oct files exist if collision is actually needed.
+#if OCT_PHYSICS
     if (StaticMesh* cubeMesh = mCubeMesh.Get<StaticMesh>())
     {
         cubeMesh->SetCollisionShape(new btBoxShape(btVector3(1.0f, 1.0f, 1.0f)));
@@ -627,6 +629,7 @@ void Renderer::LoadDefaultMeshes()
     {
         sphereMesh->SetCollisionShape(new btSphereShape(1.0f));
     }
+#endif
 }
 
 void Renderer::LoadDefaultFonts()

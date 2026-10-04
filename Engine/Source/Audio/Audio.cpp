@@ -10,6 +10,9 @@
 #include <time.h>
 #include <math.h>
 
+#include "EngineFeatures.h"
+
+#if OCT_VORBIS
 #include <vorbis/vorbisenc.h>
 
 // Most of this vorbis encoding / decoding code was taken from the official libvorbis samples.
@@ -491,3 +494,17 @@ void AUD_DecodeVorbis(Stream& inStream, Stream& outStream, PcmFormat format)
     LogDebug("Decoded Vorbis: %d bytes -> %d bytes", inStream.GetSize(), outStream.GetSize());
 }
 
+#else
+
+// Built without Vorbis (EngineFeatures.h): nothing out.
+void AUD_EncodeVorbis(Stream& inStream, Stream& outStream, PcmFormat format)
+{
+    LogError("Vorbis: this engine was built without it (OCT_VORBIS 0); a sound not encoded");
+}
+
+void AUD_DecodeVorbis(Stream& inStream, Stream& outStream, PcmFormat format)
+{
+    LogError("Vorbis: this engine was built without it (OCT_VORBIS 0); a sound is silent");
+}
+
+#endif

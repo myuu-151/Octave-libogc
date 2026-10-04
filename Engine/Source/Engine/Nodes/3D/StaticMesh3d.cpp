@@ -1,4 +1,5 @@
 #include "Nodes/3D/StaticMesh3d.h"
+#include "EngineFeatures.h"
 
 #include "Assets/StaticMesh.h"
 #include "Renderer.h"
@@ -297,6 +298,7 @@ bool StaticMesh3D::HasInstanceColors() const
 
 void StaticMesh3D::RecreateCollisionShape()
 {
+#if OCT_PHYSICS
     StaticMesh* staticMesh = mStaticMesh.Get<StaticMesh>();
 
     if (staticMesh != nullptr)
@@ -320,4 +322,7 @@ void StaticMesh3D::RecreateCollisionShape()
     {
         SetCollisionShape(Primitive3D::GetEmptyCollisionShape());
     }
+#else
+    SetCollisionShape(Primitive3D::GetEmptyCollisionShape());
+#endif
 }

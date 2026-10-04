@@ -26,6 +26,14 @@
 
 #include "btBulletDynamicsCommon.h"
 #include "BulletCollision/CollisionDispatch/btInternalEdgeUtility.h"
+#include "EngineFeatures.h"
+
+// A collision shape from an asset: none when built without physics.
+#if OCT_PHYSICS
+#define NEW_COLLISION_SHAPE(...) (new __VA_ARGS__)
+#else
+#define NEW_COLLISION_SHAPE(...) ((btCollisionShape*)nullptr)
+#endif
 
 using namespace std;
 
@@ -414,13 +422,13 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
             halfExtents.x = stream.ReadFloat();
             halfExtents.y = stream.ReadFloat();
             halfExtents.z = stream.ReadFloat();
-            collisionShapes[i] = new btBoxShape(btVector3(halfExtents.x, halfExtents.y, halfExtents.z));
+            collisionShapes[i] = NEW_COLLISION_SHAPE(btBoxShape(btVector3(halfExtents.x, halfExtents.y, halfExtents.z)));
             break;
         }
         case CollisionShape::Sphere:
         {
             float radius = stream.ReadFloat();
-            collisionShapes[i] = new btSphereShape(radius);
+            collisionShapes[i] = NEW_COLLISION_SHAPE(btSphereShape(radius));
             break;
         }
         case CollisionShape::ConvexHull:
@@ -434,15 +442,15 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
                 points.push_back(stream.ReadVec3());
             }
 
-            collisionShapes[i] = new btConvexHullShape(
+            collisionShapes[i] = NEW_COLLISION_SHAPE(btConvexHullShape(
                 reinterpret_cast<float*>(points.data()),
                 numPoints,
-                sizeof(glm::vec3));
+                sizeof(glm::vec3)));
             break;
         }
         case CollisionShape::Empty:
         {
-            collisionShapes[i] = new btEmptyShape();
+            collisionShapes[i] = NEW_COLLISION_SHAPE(btEmptyShape());
             break;
         }
         default:
@@ -1358,6 +1366,7 @@ void StaticMesh::SetCollisionShape(btCollisionShape* shape)
 
 void StaticMesh::SetCollisionShapes(uint32_t numCollisionShapes, btCollisionShape** collisionShapes, btTransform* transforms, bool compound)
 {
+#if OCT_PHYSICS
     if (numCollisionShapes > 0)
     {
         if (numCollisionShapes == 1 && !compound)
@@ -1393,6 +1402,7 @@ void StaticMesh::SetCollisionShapes(uint32_t numCollisionShapes, btCollisionShap
         }
 #endif
     }
+#endif
 }
 
 void StaticMesh::SetGenerateTriangleCollisionMesh(bool generate)
@@ -1435,6 +1445,7 @@ bool StaticMesh::ShouldGenerateTriangleCollision() const
 
 void StaticMesh::CreateTriangleCollisionShape()
 {
+#if OCT_PHYSICS
     OCT_ASSERT(mNumIndices % 3 == 0);
 
     // Don't do anything if we already have triangle collision data generated
@@ -1460,10 +1471,12 @@ void StaticMesh::CreateTriangleCollisionShape()
         mTriangleInfoMap = new btTriangleInfoMap();
         btGenerateInternalEdgeInfo(mTriangleCollisionShape, mTriangleInfoMap);
     }
+#endif
 }
 
 void StaticMesh::DestroyTriangleCollisionShape()
 {
+#if OCT_PHYSICS
     if (mTriangleInfoMap != nullptr)
     {
         delete mTriangleInfoMap;
@@ -1481,6 +1494,7 @@ void StaticMesh::DestroyTriangleCollisionShape()
         delete mTriangleIndexVertexArray;
         mTriangleIndexVertexArray = nullptr;
     }
+#endif
 }
 
 void StaticMesh::ResizeVertexArray(uint32_t newSize)
@@ -1692,14 +1706,14 @@ void StaticMesh::Create(
         if (strncmp(colMesh->mName.C_Str(), "UBX", 3) == 0)
         {
             // Box collision shape
-            collisionShapes.push_back(new btBoxShape(bScale));
+            collisionShapes.push_back(NEW_COLLISION_SHAPE(btBoxShape(bScale)));
             collisionTransforms.push_back(bTransform);
             ++numCollisionShapes;
         }
         else if (strncmp(colMesh->mName.C_Str(), "USP", 3) == 0)
         {
             // Sphere collision shape
-            collisionShapes.push_back(new btSphereShape(bScale.x()));
+            collisionShapes.push_back(NEW_COLLISION_SHAPE(btSphereShape(bScale.x())));
             collisionTransforms.push_back(bTransform);
             ++numCollisionShapes;
 
@@ -1707,10 +1721,10 @@ void StaticMesh::Create(
         else if (strncmp(colMesh->mName.C_Str(), "UCX", 3) == 0)
         {
             // Convex collision shape
-            collisionShapes.push_back(new btConvexHullShape(
+            collisionShapes.push_back(NEW_COLLISION_SHAPE(btConvexHullShape(
                 reinterpret_cast<float*>(colMesh->mVertices),
                 colMesh->mNumVertices,
-                sizeof(aiVector3D)));
+                sizeof(aiVector3D))));
             collisionTransforms.push_back(btTransform(bRotation, bPosition));
             ++numCollisionShapes;
         }

@@ -1,4 +1,5 @@
 #include "Nodes/3D/Box3d.h"
+#include "EngineFeatures.h"
 
 #include "AssetManager.h"
 #include "Renderer.h"
@@ -76,9 +77,11 @@ void Box3D::Create()
 {
     Primitive3D::Create();
 
+#if OCT_PHYSICS
     btVector3 halfExtents = btVector3(mExtents.x, mExtents.y, mExtents.z) / 2.0f;
     btBoxShape* boxShape = new btBoxShape(halfExtents);
     SetCollisionShape(boxShape);
+#endif
 
     UpdateRigidBody();
 }
@@ -109,6 +112,7 @@ Bounds Box3D::GetLocalBounds() const
 
 void Box3D::UpdateRigidBody()
 {
+#if OCT_PHYSICS
     EnableRigidBody(false);
 
     btBoxShape* boxShape = static_cast<btBoxShape*>(mCollisionShape);
@@ -122,4 +126,6 @@ void Box3D::UpdateRigidBody()
     boxShape->setImplicitShapeDimensions((halfExtents * boxShape->getLocalScaling()) - margin);
 
     EnableRigidBody(true);
+#endif
 }
+

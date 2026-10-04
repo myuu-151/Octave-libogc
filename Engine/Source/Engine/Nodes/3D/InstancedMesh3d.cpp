@@ -1,4 +1,5 @@
 #include "Nodes/3D/InstancedMesh3d.h"
+#include "EngineFeatures.h"
 #include "Assets/StaticMesh.h"
 
 FORCE_LINK_DEF(InstancedMesh3D);
@@ -318,6 +319,7 @@ Bounds InstancedMesh3D::CalculateInstanceBounds(int32_t instanceIndex)
 
 btCompoundShape* InstancedMesh3D::GeneratePaintCollisionShape()
 {
+#if OCT_PHYSICS
     btCompoundShape* compoundShape = nullptr;
 
     StaticMesh* staticMesh = mStaticMesh.Get<StaticMesh>();
@@ -347,10 +349,14 @@ btCompoundShape* InstancedMesh3D::GeneratePaintCollisionShape()
     }
 
     return compoundShape;
+#else
+    return nullptr;
+#endif
 }
 
 btCompoundShape* InstancedMesh3D::GenerateTriangleCollisionShape()
 {
+#if OCT_PHYSICS
     btCompoundShape* compoundShape = nullptr;
     StaticMesh* staticMesh = mStaticMesh.Get<StaticMesh>();
 
@@ -382,10 +388,14 @@ btCompoundShape* InstancedMesh3D::GenerateTriangleCollisionShape()
     }
 
     return compoundShape;
+#else
+    return nullptr;
+#endif
 }
 
 void InstancedMesh3D::RecreateCollisionShape()
 {
+#if OCT_PHYSICS
     StaticMesh* staticMesh = mStaticMesh.Get<StaticMesh>();
 
     if (staticMesh != nullptr && 
@@ -400,6 +410,9 @@ void InstancedMesh3D::RecreateCollisionShape()
     {
         SetCollisionShape(Primitive3D::GetEmptyCollisionShape());
     }
+#else
+    SetCollisionShape(Primitive3D::GetEmptyCollisionShape());
+#endif
 }
 
 void InstancedMesh3D::CalculateLocalBounds()

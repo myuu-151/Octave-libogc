@@ -1,4 +1,5 @@
 #include "Nodes/3D/Sphere3d.h"
+#include "EngineFeatures.h"
 
 #include "AssetManager.h"
 #include "Renderer.h"
@@ -75,7 +76,9 @@ void Sphere3D::GatherProxyDraws(std::vector<DebugDraw>& inoutDraws)
 void Sphere3D::Create()
 {
     Primitive3D::Create();
+#if OCT_PHYSICS
     SetCollisionShape(new btSphereShape(mRadius));
+#endif
     UpdateRigidBody();
 }
 
@@ -103,6 +106,7 @@ Bounds Sphere3D::GetLocalBounds() const
 
 void Sphere3D::UpdateRigidBody()
 {
+#if OCT_PHYSICS
     EnableRigidBody(false);
 
     btSphereShape* sphereShape = static_cast<btSphereShape*>(mCollisionShape);
@@ -112,4 +116,5 @@ void Sphere3D::UpdateRigidBody()
     sphereShape->setMargin(mRadius);
 
     EnableRigidBody(true);
+#endif
 }

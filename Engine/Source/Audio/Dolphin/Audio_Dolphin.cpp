@@ -19,6 +19,15 @@
 #include <stdio.h>
 #include <vector>
 #include "vorbis/vorbisfile.h"
+#include "EngineFeatures.h"
+#if !OCT_VORBIS
+// Built without Vorbis (EngineFeatures.h): a streamed sound never opens (the
+// error is logged where it's opened), so none of vorbisfile is linked.
+#define ov_open_callbacks(source, vf, initial, ibytes, callbacks) ((void)(vf), -1)
+#define ov_read(vf, buffer, length, bigendian, word, sgned, bitstream) ((void)(vf), 0L)
+#define ov_pcm_seek(vf, pos) ((void)(vf))
+#define ov_clear(vf) ((void)(vf))
+#endif
 
 static int32_t sSampleRates[AUDIO_MAX_VOICES] = {};
 

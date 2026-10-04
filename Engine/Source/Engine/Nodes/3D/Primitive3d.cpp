@@ -8,6 +8,7 @@
 #include "Assets/StaticMesh.h"
 
 #include <btBulletDynamicsCommon.h>
+#include "EngineFeatures.h"
 
 #if EDITOR
 #include "EditorState.h"
@@ -572,6 +573,7 @@ void Primitive3D::ClearForces()
 
 void Primitive3D::FullSyncRigidBodyTransform()
 {
+#if OCT_PHYSICS
     // Because updating transform is something that might happen very often
     // We only sync transform instead of calling Enable/DisableRigidBody
     btDynamicsWorld* dynamicsWorld = GetWorld()->GetDynamicsWorld();
@@ -579,6 +581,7 @@ void Primitive3D::FullSyncRigidBodyTransform()
     SyncRigidBodyTransform();
     mRigidBody->activate(true);
     dynamicsWorld->addRigidBody(mRigidBody, mCollisionGroup, mCollisionMask);
+#endif
 }
 
 void Primitive3D::SyncRigidBodyTransform()
@@ -946,6 +949,7 @@ void Primitive3D::EnableRigidBody(bool enable)
     if (world == nullptr)
         return;
 
+#if OCT_PHYSICS
     if (!enable && IsRigidBodyInWorld())
     {
         world->GetDynamicsWorld()->removeRigidBody(mRigidBody);
@@ -1003,6 +1007,7 @@ void Primitive3D::EnableRigidBody(bool enable)
             dynamicsWorld->addRigidBody(mRigidBody, mCollisionGroup, mCollisionMask);
         }
     }
+#endif
 }
 
 void Primitive3D::DestroyComponentCollisionShape()

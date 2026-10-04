@@ -19,6 +19,7 @@
 #include "Input/Input.h"
 
 #include <btBulletDynamicsCommon.h>
+#include "EngineFeatures.h"
 
 #include "Script.h"
 
@@ -142,6 +143,7 @@ void CreateSymLink(const std::string& original, const std::string& link)
 
 btCollisionShape* CloneCollisionShape(const btCollisionShape* srcShape)
 {
+#if OCT_PHYSICS
     btCollisionShape* retShape = nullptr;
 
     if (srcShape != nullptr)
@@ -229,10 +231,14 @@ btCollisionShape* CloneCollisionShape(const btCollisionShape* srcShape)
     }
 
     return retShape;
+#else
+    return nullptr;
+#endif
 }
 
 void DestroyCollisionShape(btCollisionShape* shape)
 {
+#if OCT_PHYSICS
     if (shape != nullptr)
     {
         if (shape->isCompound())
@@ -248,12 +254,14 @@ void DestroyCollisionShape(btCollisionShape* shape)
         
         delete shape;
     }
+#endif
 }
 
 static int32_t sDebugConvexCollisionMeshIndex = 0;
 
 void DebugDrawCollisionShape(btCollisionShape* collisionShape, Node3D* node, const glm::mat4& parentTransform, std::vector<DebugDraw>* inoutDraws)
 {
+#if OCT_PHYSICS
     std::vector<btCollisionShape*> collisionShapes;
     std::vector<glm::mat4> collisionTransforms;
 
@@ -372,6 +380,7 @@ void DebugDrawCollisionShape(btCollisionShape* collisionShape, Node3D* node, con
             Renderer::Get()->AddDebugDraw(debugDraw);
         }
     }
+#endif
 }
 
 uint32_t OctHashString(const char* key)
