@@ -125,7 +125,9 @@ void Renderer::Initialize()
         mLoadingScreenWidget->SetVisible(false);
     }
 
-#if (PLATFORM_WINDOWS || PLATFORM_LINUX || PLATFORM_ANDROID) && !_DEBUG
+// (On the GameCube and Wii too: shown, the engine's log lines came up over the boot splash in
+// green, though every game hid the console as soon as it started.)
+#if (PLATFORM_WINDOWS || PLATFORM_LINUX || PLATFORM_ANDROID || PLATFORM_DOLPHIN) && !_DEBUG
     if (mConsoleWidget != nullptr)
     {
         mConsoleWidget->SetVisible(false);
