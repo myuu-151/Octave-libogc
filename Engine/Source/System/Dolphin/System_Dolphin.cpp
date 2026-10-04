@@ -925,7 +925,10 @@ namespace
         SysReadLocator mLocate = nullptr;
         void* mLocateCtx = nullptr;
     };
-    alignas(32) char sStaging[32 * 1024];   // the reader thread's own: SD to here, then to ARAM
+    // The reader thread's own: SD to here, then to ARAM. Made at the first read into ARAM (only a
+    // texture's stash does one, from Lua), so a game that never does doesn't keep these 32 KB.
+    const uint32_t kStagingSize = 32 * 1024;
+    char* sStaging = nullptr;
 
     const uint32_t kMaxBackgroundReads = 16;
     const uint32_t kBackgroundPiece = 32 * 1024;
@@ -974,7 +977,9 @@ namespace
                 }
                 else
                 {
-                    ok = SYS_ReadFileRange(read.mPath.c_str(), true, read.mOffset + at, n, sStaging);
+                    if (sStaging == nullptr) sStaging = (char*)memalign(32, kStagingSize);
+                    ok = sStaging != nullptr &&
+                         SYS_ReadFileRange(read.mPath.c_str(), true, read.mOffset + at, n, sStaging);
 #if PLATFORM_GAMECUBE
                     if (ok) AUD_AramDma(true, sStaging, read.mAram + at, n);
 #else
@@ -1146,7 +1151,8 @@ void OctGeckoLog(const char* line);
 namespace
 {
     const uint32_t kGeckoLines = 64;
-    char sGeckoQueue[kGeckoLines][512];
+    // Made when a Gecko is found (OctGeckoLogEnable): without one, these 32 KB aren't kept.
+    char (*sGeckoQueue)[512] = nullptr;
     volatile uint32_t sGeckoHead = 0;       // next to send
     volatile uint32_t sGeckoTail = 0;       // next free
     volatile uint32_t sGeckoDropped = 0;
@@ -1258,6 +1264,11 @@ bool OctGeckoLogEnable()
             sGeckoSem = LWP_SEM_NULL;
             return false;
         }
+    }
+    if (sGeckoQueue == nullptr)
+    {
+        sGeckoQueue = (char (*)[512])malloc(kGeckoLines * 512);
+        if (sGeckoQueue == nullptr) return false;
     }
     usb_flush(sGeckoChannel);
     sGeckoOn = true;

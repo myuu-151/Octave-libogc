@@ -119,11 +119,19 @@ bool OctDvdReadAligned(uint32_t alignedOff, void* dst, uint32_t alignedLen)
 // wanted for every read failed now and then with the heap full, and the read failed
 // with it (a marathon's change of sky left frames half one sky). Every caller holds the
 // disc lock (IsoReadRaw), so one buffer serves them all.
-static uint8_t sBounce[64 * 1024] __attribute__((aligned(32)));
+// Made at the first read from a disc (at boot, while memory is in one piece) and kept: a game that
+// reads its image from the SD card never reads the disc, and doesn't keep these 64 KB.
+static const uint32_t kBounceSize = 64 * 1024;
+static uint8_t* sBounce = nullptr;
 
 bool OctDvdRead(uint32_t offset, void* buf, uint32_t len)
 {
-    const uint32_t kPiece = sizeof(sBounce);
+    if (sBounce == nullptr)
+    {
+        sBounce = (uint8_t*)memalign(32, kBounceSize);
+        if (sBounce == nullptr) return false;
+    }
+    const uint32_t kPiece = kBounceSize;
     uint32_t head    = offset & 31u;
     uint32_t scratch = (head + len + 31u) & ~31u;
     if (scratch > kPiece) scratch = kPiece;
