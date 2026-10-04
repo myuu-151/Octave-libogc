@@ -49,6 +49,18 @@ static int sSdChannel = -1;
 #endif
 
 static bool sFatInit = false;
+
+// A memory card in this slot (its EXI ID: a size code, the test libogc's card driver makes). Neither
+// the SD probes nor the USB Gecko's are sent to it: with a USB Gecko in slot B and no SD card, every
+// save written to slot A's card failed (CARD_Write: -5, IO error).
+static bool SlotHasMemoryCard(s32 chan)
+{
+    u32 id = 0;
+    if (!EXI_GetID(chan, EXI_DEVICE_0, &id))
+        return false;
+    return id != 0 && id != 0xffffffff && (id & 0xffff0000) == 0 && (id & 3) == 0;
+}
+
 // Every file read calls InitFAT(). With no card in (Dolphin, or a console booted from a disc)
 // the mount fails -- and it used to be tried again on EVERY read. A game that streams assets
 // does hundreds of reads: about 460 failed mounts in, the console froze. A few tries cover a
@@ -69,7 +81,13 @@ static void InitFAT()
             return;
         }
 #endif
-        if (fatInitDefault())
+#if PLATFORM_GAMECUBE
+        // (libogc's own mount tries both card slots too: not with a memory card in one.)
+        const bool mayProbe = !SlotHasMemoryCard(EXI_CHANNEL_0) && !SlotHasMemoryCard(EXI_CHANNEL_1);
+#else
+        const bool mayProbe = true;  // (the Wii's SD slot)
+#endif
+        if (mayProbe && fatInitDefault())
         {
             LogDebug("FAT Initialized Successfully.\n");
             sFatInit = true;
@@ -1127,6 +1145,8 @@ namespace
     volatile uint32_t sGeckoTail = 0;       // next free
     volatile uint32_t sGeckoDropped = 0;
     volatile bool sGeckoOn = false;
+    volatile int32_t sGeckoHold = 0;      // card reads and writes under way (GeckoQuiet): nothing sent
+    volatile bool sGeckoSending = false;  // a line going out now
     s32 sGeckoChannel = -1;
     sem_t sGeckoSem = LWP_SEM_NULL;
     lwp_t sGeckoThread = LWP_THREAD_NULL;
@@ -1149,6 +1169,10 @@ namespace
             LWP_SemWait(sGeckoSem);
             while (sGeckoHead != sGeckoTail)
             {
+                // The card is being read or written: the lines wait (and the hold's end wakes us).
+                if (sGeckoHold > 0)
+                    break;
+                sGeckoSending = true;
                 const uint32_t dropped = sGeckoDropped;
                 if (dropped != 0)
                 {
@@ -1163,11 +1187,40 @@ namespace
                     GeckoSend("\r\n", 2);
                 }
                 sGeckoHead = sGeckoHead + 1;
+                sGeckoSending = false;
             }
         }
         return nullptr;
     }
 }
+
+// While one lives, the Gecko log sends nothing (the lines wait): for the memory card's reads and
+// writes, so the two never share the EXI bus mid-transfer.
+struct GeckoQuiet
+{
+    GeckoQuiet()
+    {
+        sGeckoHold = sGeckoHold + 1;
+        while (sGeckoSending)  // (a line already going out finishes first)
+            usleep(200);
+    }
+    ~GeckoQuiet()
+    {
+        sGeckoHold = sGeckoHold - 1;
+        if (sGeckoHold == 0 && sGeckoSem != LWP_SEM_NULL)
+            LWP_SemPost(sGeckoSem);
+    }
+};
+
+// For the memory card's reads and writes: no disc read (the ISO's lock held, a read under way
+// finishing first) and no Gecko line meanwhile. With the SD card in an SD2SP2, the ISO is read over
+// EXI channel 0 -- slot A's channel -- and the music streaming from it while a save was written
+// failed every save (CARD_Write: -5, IO error). (With the SD card in slot B, channel 1, they never met.)
+struct CardQuiet
+{
+    ScopedLock iso{GetIsoMutex()};
+    GeckoQuiet gecko;
+};
 
 // Finds the USB Gecko (slot A, else slot B) and starts sending the log to it. False if there's none.
 bool OctGeckoLogEnable()
@@ -1178,9 +1231,9 @@ bool OctGeckoLogEnable()
     }
     if (sGeckoChannel < 0)
     {
-        if (usb_isgeckoalive(EXI_CHANNEL_0))
+        if (!SlotHasMemoryCard(EXI_CHANNEL_0) && usb_isgeckoalive(EXI_CHANNEL_0))
             sGeckoChannel = EXI_CHANNEL_0;
-        else if (usb_isgeckoalive(EXI_CHANNEL_1))
+        else if (!SlotHasMemoryCard(EXI_CHANNEL_1) && usb_isgeckoalive(EXI_CHANNEL_1))
             sGeckoChannel = EXI_CHANNEL_1;
         else
             return false;
@@ -1774,6 +1827,7 @@ static const char* CardErrorName(int32_t error)
 //   other region's), "busy", "error": why the card cannot be used at all
 const char* SYS_GetSaveCardState(const char* saveName, uint32_t dataBytes, int32_t& blocksNeeded, int32_t& blocksFree)
 {
+    CardQuiet quiet;
     blocksNeeded = 0;
     blocksFree = 0;
     MountMemoryCard();
@@ -1825,6 +1879,7 @@ const char* SYS_GetSaveCardState(const char* saveName, uint32_t dataBytes, int32
 
 bool SYS_ReadSave(const char* saveName, Stream& outStream)
 {
+    CardQuiet quiet;
     // This needs to be different between GameCube and Wii, since GameCube uses memory cards and Wii uses SD cards.
     bool success = false;
 
@@ -1886,6 +1941,7 @@ bool SYS_ReadSave(const char* saveName, Stream& outStream)
 
 bool SYS_WriteSave(const char* saveName, Stream& stream)
 {
+    CardQuiet quiet;
     bool success = false;
 #if PLATFORM_WII
     
@@ -2044,6 +2100,7 @@ bool SYS_WriteSave(const char* saveName, Stream& stream)
 
 bool SYS_DoesSaveExist(const char* saveName)
 {
+    CardQuiet quiet;
     bool exists = false;
 
 #if PLATFORM_WII
@@ -2083,6 +2140,7 @@ bool SYS_DoesSaveExist(const char* saveName)
 
 bool SYS_DeleteSave(const char* saveName)
 {
+    CardQuiet quiet;
     bool success = false;
 
 #if PLATFORM_WII

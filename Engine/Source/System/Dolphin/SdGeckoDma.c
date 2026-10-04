@@ -1459,6 +1459,18 @@ static const DISC_INTERFACE __io_octsd2 = {
    "carda", "cardb"; the first one mounted becomes the working directory. libfat's
    GameCube defaults are 4 cache pages of 64 sectors. Returns the EXI channel that
    became the default device, or -1 if none mounted. */
+/* A memory card in this slot (its EXI ID: a size code, the test libogc's card
+   driver makes): not to be probed for an SD adapter. The probe's commands reach
+   the card: with a USB Gecko in slot B and no SD card anywhere, every probe
+   went through slot A's card, and every save written after failed (CARD_Write:
+   -5, IO error). */
+static bool SlotHasMemoryCard(int chan)
+{
+	u32 id = 0;
+	if(!EXI_GetID(chan,EXI_DEVICE_0,&id)) return false;
+	return id!=0 && id!=0xffffffff && (id&0xffff0000)==0 && (id&3)==0;
+}
+
 int OctSd_MountAll(void)
 {
 	static const struct { const char *name; const DISC_INTERFACE *disc; int chan; } devices[] = {
@@ -1470,6 +1482,7 @@ int OctSd_MountAll(void)
 	int i;
 
 	for(i=0;i<3;i++) {
+		if(devices[i].chan<2 && SlotHasMemoryCard(devices[i].chan)) continue;
 		if(!fatMount(devices[i].name,devices[i].disc,0,4,64)) continue;
 		__sd_event("mounted %s: EXI ch%d mode=%s",devices[i].name,devices[i].chan,OctSd_GetModeName(devices[i].chan));
 		if(defaultChan<0) {
