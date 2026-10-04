@@ -44,6 +44,9 @@
 #if PLATFORM_GAMECUBE
 // SdGeckoDma.c: libogc's SD Gecko driver with DMA reads and a faster EXI clock.
 extern "C" int OctSd_MountAll(void);
+#if PLATFORM_GAMECUBE
+extern "C" void OctSd_NoteThreadPriority(u32 prio);  // (SdGeckoDma.c: its card reads above the main thread)
+#endif
 extern "C" const char* OctSd_GetModeName(int chan);
 static int sSdChannel = -1;
 #endif
@@ -935,6 +938,9 @@ namespace
 
     void* BackgroundReadThread(void*)
     {
+#if PLATFORM_GAMECUBE
+        OctSd_NoteThreadPriority(45);  // (as created below)
+#endif
         while (true)
         {
             LWP_SemWait(sBackgroundSem);

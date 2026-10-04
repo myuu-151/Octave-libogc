@@ -131,6 +131,23 @@ static bool _ioSemiPassive[MAX_DRIVE];
 static u32 _ioLevel[MAX_DRIVE];
 static const char *_ioFailStage[MAX_DRIVE];
 static u32 _ioFailBlock[MAX_DRIVE];
+// An SD card has answered on this channel since boot. Then an ID other than an SD
+// card's (0xffffffff) at a restart is the card itself, left mid-transfer by a read
+// that failed partway (still driving the data line), not some other device: it is
+// reset rather than given up on. Giving up there made one failed read the end of
+// every read that came after (CCGC, level 30's boss: "549 KB in 2 ms (FAILED)").
+static bool _ioCardSeen[MAX_DRIVE];
+static u32 _ioRestartFails;
+
+// Threads that read the card from below the main thread's priority note it here
+// (OctSd_NoteThreadPriority); each read they make runs above the main thread
+// (kReadPriority), then back. The card's own waits are timed (1.5 s for a block's
+// token): a reader starved mid-transfer by a busy main thread could time out, and
+// leave the card mid-transfer.
+#define READ_PRIORITY						66
+#define NOTED_THREADS						8
+static struct { lwp_t thread; u32 prio; } _ioNoted[NOTED_THREADS];
+static u32 _ioNotedCount;
 
 static void __card_applyLevel(s32 drv_no)
 {
@@ -1147,7 +1164,11 @@ static s32 __card_initIO(s32 drv_no)
 
 	u32 id = 0;
 	EXI_GetID(drv_no,EXI_DEVICE_0,&id);
-	if ( id != -1 ) return CARDIO_ERROR_NOCARD;
+	if ( id != -1 ) {
+		if(!_ioCardSeen[drv_no]) return CARDIO_ERROR_NOCARD;
+		if(_ioRestartFails<10 || _ioRestartFails%50==0)
+			__sd_event("ch%d restart: ID %08x (the card mid-transfer?): resetting it",drv_no,(unsigned)id);
+	}
 
 	if(_ioRetryCnt>5) {
 		_ioRetryCnt = 0;
@@ -1174,6 +1195,7 @@ static s32 __card_initIO(s32 drv_no)
 			_ioSemiPassive[drv_no] = true;
 			if(__card_softreset(drv_no)!=0) _ioSemiPassive[drv_no] = false;
 		}
+		const char *step = "reset";
 		if(!_ioSemiPassive[drv_no] && __card_softreset(drv_no)!=0) {
 			_ioWPFlag = 1;
 			if(__card_softreset(drv_no)!=0) goto exit;
@@ -1182,14 +1204,19 @@ static s32 __card_initIO(s32 drv_no)
 		if(probed)
 			__sd_event("ch%d adapter: %s",drv_no,_ioSemiPassive[drv_no]?"semi-passive (DMA)":"passive (PIO only)");
 
+		step = "cmd8";
 		if(__card_sendCMD8(drv_no)!=0) goto exit;
 		if((_ioResponse[drv_no][3]==1) && (_ioResponse[drv_no][4]==0xAA)) _initType[drv_no] = TYPE_SDHC;
 
+		step = "opcond";
 		if(__card_sendopcond(drv_no)!=0) goto exit;
+		step = "csd";
 		if(__card_readcsd(drv_no)!=0) goto exit;
+		step = "cid";
 		if(__card_readcid(drv_no)!=0) goto exit;
 
 		if(_initType[drv_no]==TYPE_SDHC) {
+			step = "cmd58";
 			if(__card_sendCMD58(drv_no)!=0) goto exit;
 			if(_ioResponse[drv_no][1] & 0x40) {
 				_ioAddressingType[drv_no] = CARD_IO_SECTOR_ADDRESSING;
@@ -1197,16 +1224,24 @@ static s32 __card_initIO(s32 drv_no)
 		}
 
 		_ioPageSize[drv_no] = 1<<WRITE_BL_LEN(drv_no);
+		step = "blocklen";
 		if(__card_setblocklen(drv_no,_ioPageSize[drv_no])!=0) goto exit;
 
+		step = "status";
 		if(__card_sd_status(drv_no)!=0) goto exit;
 
+		if(_ioRestartFails) __sd_event("ch%d restarted after %u failed tries",drv_no,(unsigned)_ioRestartFails);
+		_ioRestartFails = 0;
 		_ioRetryCnt = 0;
 		_ioFlag[drv_no] = INITIALIZED;
+		_ioCardSeen[drv_no] = true;
 
 		__card_applyLevel(drv_no);
 		return CARDIO_ERROR_READY;
 exit:
+		_ioRestartFails++;
+		if(_ioCardSeen[drv_no] && (_ioRestartFails<10 || _ioRestartFails%50==0))
+			__sd_event("ch%d restart failed at %s (%u in a row)",drv_no,step,(unsigned)_ioRestartFails);
 		_ioRetryCB = __card_retrycb;
 		return __card_doUnmount(drv_no);
 	}
@@ -1399,14 +1434,48 @@ static bool __octsd_isInserted(int n)
 	return __card_readStatus(n)==CARDIO_ERROR_READY;
 }
 
+/* A noted thread's priority (OctSd_NoteThreadPriority); 0 if it isn't noted. */
+static u32 __noted_priority(lwp_t self)
+{
+	u32 i;
+	for(i=0;i<_ioNotedCount;i++)
+		if(_ioNoted[i].thread==self) return _ioNoted[i].prio;
+	return 0;
+}
+
 static bool __octsd_readSectors(int n,sec_t sector,sec_t numSectors,void *buffer)
 {
-	return __card_readSectors(n,sector,numSectors,buffer)==CARDIO_ERROR_READY;
+	const u32 prio = __noted_priority(LWP_GetSelf());
+	if(prio) LWP_SetThreadPriority(LWP_THREAD_NULL,READ_PRIORITY);
+	const bool ok = __card_readSectors(n,sector,numSectors,buffer)==CARDIO_ERROR_READY;
+	if(prio) LWP_SetThreadPriority(LWP_THREAD_NULL,prio);
+	return ok;
 }
 
 static bool __octsd_writeSectors(int n,sec_t sector,sec_t numSectors,const void *buffer)
 {
-	return __card_writeSectors(n,sector,numSectors,buffer)==CARDIO_ERROR_READY;
+	const u32 prio = __noted_priority(LWP_GetSelf());
+	if(prio) LWP_SetThreadPriority(LWP_THREAD_NULL,READ_PRIORITY);
+	const bool ok = __card_writeSectors(n,sector,numSectors,buffer)==CARDIO_ERROR_READY;
+	if(prio) LWP_SetThreadPriority(LWP_THREAD_NULL,prio);
+	return ok;
+}
+
+/* A thread that reads the card from below the main thread's priority calls this
+   once, with that priority: its reads then each run above the main thread. */
+void OctSd_NoteThreadPriority(u32 prio)
+{
+	u32 level;
+	const lwp_t self = LWP_GetSelf();
+	_CPU_ISR_Disable(level);
+	u32 i;
+	for(i=0;i<_ioNotedCount && _ioNoted[i].thread!=self;i++);
+	if(i<NOTED_THREADS) {
+		_ioNoted[i].thread = self;
+		_ioNoted[i].prio = prio;
+		if(i==_ioNotedCount) _ioNotedCount++;
+	}
+	_CPU_ISR_Restore(level);
 }
 
 static bool __octsd_shutdown(int n)

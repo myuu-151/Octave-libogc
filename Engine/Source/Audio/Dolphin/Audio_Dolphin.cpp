@@ -107,8 +107,15 @@ static StreamVoice sStreams[AUDIO_MAX_VOICES];
 
 // Serves read-ahead requests. Below the main thread's priority (see AUD_Initialize), so it runs
 // while the main thread waits on the GPU and vsync, not in the middle of its work.
+#if PLATFORM_GAMECUBE
+extern "C" void OctSd_NoteThreadPriority(u32 prio);  // (SdGeckoDma.c: its card reads above the main thread)
+#endif
+
 static void* AudioIoThread(void*)
 {
+#if PLATFORM_GAMECUBE
+    OctSd_NoteThreadPriority(50);  // (as created in AUD_Initialize)
+#endif
     while (true)
     {
         LWP_SemWait(sAudioIoSem);
