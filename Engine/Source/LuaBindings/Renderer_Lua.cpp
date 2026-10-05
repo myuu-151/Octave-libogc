@@ -1,4 +1,5 @@
 #include "Renderer.h"
+#include "EngineFeatures.h"
 #include "Engine.h"
 #include "AssetManager.h"
 #include "Utilities.h"
@@ -30,6 +31,7 @@ int Renderer_Lua::EnableStatsOverlay(lua_State* L)
 
     Renderer::Get()->EnableStatsOverlay(value);
 
+#if OCT_STATS
     StatsOverlay* overlay = Renderer::Get()->GetStatsWidget();
 
     if (value && overlay)
@@ -52,6 +54,9 @@ int Renderer_Lua::EnableStatsOverlay(lua_State* L)
 
         overlay->SetDisplayMode(dispMode);
     }
+#else
+    (void)mode;  // (no stats overlay: EngineFeatures.h)
+#endif
 
     return 0;
 }

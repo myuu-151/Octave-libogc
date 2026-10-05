@@ -1255,10 +1255,12 @@ void World::SweepTest(
 
 void World::RegisterNode(Node* node, bool subRoot)
 {
+#if OCT_NAVIGATION
     if (mAutoNavRebuild && node && (node->As<StaticMesh3D>() != nullptr || node->As<NavMesh3D>() != nullptr))
     {
         InvalidateWorldNavCache(this);
     }
+#endif
 
     TypeId nodeType = node->GetType();
 
@@ -1295,10 +1297,12 @@ void World::RegisterNode(Node* node, bool subRoot)
 
 void World::UnregisterNode(Node* node, bool subRoot)
 {
+#if OCT_NAVIGATION
     if (mAutoNavRebuild && node && (node->As<StaticMesh3D>() != nullptr || node->As<NavMesh3D>() != nullptr))
     {
         InvalidateWorldNavCache(this);
     }
+#endif
 
     TypeId nodeType = node->GetType();
 
@@ -1808,6 +1812,7 @@ Particle3D* World::SpawnParticle(ParticleSystem* sys, glm::vec3 position)
 {
     Particle3D* ret = nullptr;
 
+#if OCT_PARTICLES
     if (sys != nullptr)
     {
         ret = SpawnNode<Particle3D>();
@@ -1816,6 +1821,10 @@ Particle3D* World::SpawnParticle(ParticleSystem* sys, glm::vec3 position)
         ret->EnableEmission(true);
         ret->EnableAutoDestroy(true);
     }
+#else
+    (void)sys;
+    (void)position;  // (particles left out: EngineFeatures.h)
+#endif
 
     return ret;
 }

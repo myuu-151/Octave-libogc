@@ -1,6 +1,7 @@
 #if API_GX
 
 #include "Graphics/Graphics.h"
+#include "EngineFeatures.h"
 #include "Graphics/GraphicsTypes.h"
 #include "Graphics/GX/GxTypes.h"
 #include "Graphics/GX/GxUtils.h"
@@ -1070,6 +1071,7 @@ void GFX_DestroyStaticMeshResource(StaticMesh* staticMesh)
 }
 
 // SkeletalMesh
+#if OCT_SKELETAL
 void GFX_CreateSkeletalMeshResource(SkeletalMesh* skeletalMesh, uint32_t numVertices, VertexSkinned* vertices, uint32_t numIndices, IndexType* indices)
 {
 
@@ -1079,6 +1081,7 @@ void GFX_DestroySkeletalMeshResource(SkeletalMesh* skeletalMesh)
 {
 
 }
+#endif
 
 // StaticMeshComp
 void GFX_CreateStaticMeshCompResource(StaticMesh3D* staticMeshComp)
@@ -1176,6 +1179,7 @@ void GFX_DrawStaticMeshComp(StaticMesh3D* staticMeshComp, StaticMesh* meshOverri
 }
 
 // SkeletalMeshComp
+#if OCT_SKELETAL
 void GFX_CreateSkeletalMeshCompResource(SkeletalMesh3D* skeletalMeshComp)
 {
 
@@ -1367,6 +1371,7 @@ bool GFX_IsCpuSkinningRequired(SkeletalMesh3D* skeletalMeshComp)
 {
     return IsCpuSkinningRequired(skeletalMeshComp);
 }
+#endif
 
 // ShadowMeshComp
 void GFX_DrawShadowMeshComp(ShadowMesh3D* shadowMeshComp)
@@ -1448,12 +1453,15 @@ void GFX_DrawShadowMeshComp(ShadowMesh3D* shadowMeshComp)
 }
 
 // InstancedMeshComp
+#if OCT_INSTANCING
 void GFX_DrawInstancedMeshComp(InstancedMesh3D* instancedMeshComp)
 {
 
 }
+#endif
 
 // TextMeshComp
+#if OCT_TEXT3D
 void GFX_CreateTextMeshCompResource(TextMesh3D* textMeshComp)
 {
 
@@ -1548,8 +1556,10 @@ void GFX_DrawTextMeshComp(TextMesh3D* textMeshComp)
         GX_SetTevSwapMode(2, GX_TEV_SWAP0, GX_TEV_SWAP0);
     }
 }
+#endif
 
 // ParticleComp
+#if OCT_PARTICLES
 void GFX_CreateParticleCompResource(Particle3D* particleComp)
 {
 
@@ -1657,6 +1667,7 @@ void GFX_DrawParticleComp(Particle3D* particleComp)
         GX_End();
     }
 }
+#endif
 
 // Quad
 void GFX_CreateQuadResource(Quad* quad)

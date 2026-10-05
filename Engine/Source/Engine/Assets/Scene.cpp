@@ -1,4 +1,5 @@
 #include "Assets/Scene.h"
+#include "EngineFeatures.h"
 
 #include "World.h"
 #include "Log.h"
@@ -495,6 +496,7 @@ NodePtr Scene::Instantiate()
                 OCT_ASSERT(parent != nullptr);
 
                 // Note: We call AddChild even if the node already existed natively to ensure the order matches scene order.
+#if OCT_SKELETAL
                 if (mNodeDefs[i].mParentBone >= 0)
                 {
                     SkeletalMesh3D* parentSk = parent->As<SkeletalMesh3D>();
@@ -508,6 +510,7 @@ NodePtr Scene::Instantiate()
                     }
                 }
                 else
+#endif
                 {
                     parent->AddChild(node);
                 }

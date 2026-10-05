@@ -8,15 +8,21 @@
 #include "Nodes/Widgets/Widget.h"
 #include "Nodes/Widgets/Console.h"
 #include "Nodes/Widgets/LoadingScreen.h"
-#include "Nodes/Widgets/StatsOverlay.h"
+#include "Nodes/Widgets/StatsOverlay.h"  // (a member's type; with OCT_STATS off it is never made)
 #include "Nodes/Widgets/Quad.h"
 #include "Assets/Font.h"
 #include "Nodes/3D/PointLight3d.h"
 #include "Nodes/3D/Primitive3d.h"
+#if OCT_PARTICLES
 #include "Nodes/3D/Particle3d.h"
+#endif
+#if OCT_SKELETAL
 #include "Nodes/3D/SkeletalMesh3d.h"
+#endif
 #include "Nodes/3D/ShadowMesh3d.h"
+#if OCT_SPLINES
 #include "Nodes/3D/Spline3d.h"
+#endif
 #include "Log.h"
 #include "Line.h"
 #include "Maths.h"
@@ -114,7 +120,9 @@ void Renderer::Initialize()
     mConsoleWidget = Node::Construct<Console>();
 #endif
 
+#if OCT_STATS
     mStatsWidget = Node::Construct<StatsOverlay>();
+#endif
 
     // Hidden until something asks for it. A project that never loads anything visible should not
     // pay for a black quad over its first frame.
@@ -810,8 +818,12 @@ void Renderer::GatherDrawData(World* world)
 #if DEBUG_DRAW_ENABLED
             bool proxyActorEnabled = true;
 
+#if OCT_SPLINES
             bool isSpline = node->Is("Spline3D");
             bool drawSplineLines = isSpline && Spline3D::IsSplineLinesVisible();
+#else
+            bool drawSplineLines = false;
+#endif
 
             if ((mEnableProxyRendering || drawSplineLines) &&
                 mDebugMode != DEBUG_COLLISION &&
@@ -1229,6 +1241,7 @@ void Renderer::FrustumCull(Camera3D* camera)
 
 static inline void HandleCullResult(DrawData& drawData, bool inFrustum)
 {
+#if OCT_SKELETAL
     if (drawData.mNodeType == SkeletalMesh3D::GetStaticType())
     {
         SkeletalMesh3D* skNode = static_cast<SkeletalMesh3D*>(drawData.mNode);
@@ -1250,7 +1263,12 @@ static inline void HandleCullResult(DrawData& drawData, bool inFrustum)
             }
         }
     }
-    else if (drawData.mNodeType == Particle3D::GetStaticType())
+#endif
+#if OCT_SKELETAL && OCT_PARTICLES
+    else
+#endif
+#if OCT_PARTICLES
+    if (drawData.mNodeType == Particle3D::GetStaticType())
     {
         Particle3D* pNode = static_cast<Particle3D*>(drawData.mNode);
 
@@ -1264,6 +1282,7 @@ static inline void HandleCullResult(DrawData& drawData, bool inFrustum)
             pNode->Simulate(GetEngineState()->mGameDeltaTime);
         }
     }
+#endif
 }
 
 int32_t Renderer::FrustumCullDraws(const CameraFrustum& frustum, std::vector<DrawData>& drawData)

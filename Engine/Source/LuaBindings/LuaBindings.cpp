@@ -22,42 +22,74 @@
 #include "LuaBindings/Primitive3d_Lua.h"
 #include "LuaBindings/Mesh3d_Lua.h"
 #include "LuaBindings/StaticMesh3d_Lua.h"
+#if OCT_SKELETAL
 #include "LuaBindings/SkeletalMesh3d_Lua.h"
+#endif
 #include "LuaBindings/Camera3d_Lua.h"
 #include "LuaBindings/Light3d_Lua.h"
 #include "LuaBindings/DirectionalLight3d_Lua.h"
 #include "LuaBindings/PointLight3d_Lua.h"
 #include "LuaBindings/Audio3d_Lua.h"
+#if OCT_PHYSICS
 #include "LuaBindings/Box3d_Lua.h"
+#endif
+#if OCT_PHYSICS
 #include "LuaBindings/Capsule3d_Lua.h"
+#endif
+#if OCT_PARTICLES
 #include "LuaBindings/Particle3d_Lua.h"
+#endif
+#if OCT_SPLINES
 #include "LuaBindings/Spline3d_Lua.h"
+#endif
 #include "LuaBindings/ShadowMesh3d_Lua.h"
+#if OCT_INSTANCING
 #include "LuaBindings/InstancedMesh3d_Lua.h"
+#endif
+#if OCT_TEXT3D
 #include "LuaBindings/TextMesh3d_Lua.h"
+#endif
+#if OCT_PHYSICS
 #include "LuaBindings/Sphere3d_Lua.h"
+#endif
+#if OCT_VIDEO
 #include "LuaBindings/Video3d_Lua.h"
+#endif
 #include "LuaBindings/Asset_Lua.h"
 #include "LuaBindings/Scene_Lua.h"
 #include "LuaBindings/Material_Lua.h"
 #include "LuaBindings/MaterialInstance_Lua.h"
 #include "LuaBindings/MaterialLite_Lua.h"
+#if OCT_PARTICLES
 #include "LuaBindings/ParticleSystem_Lua.h"
+#endif
+#if OCT_PARTICLES
 #include "LuaBindings/ParticleSystemInstance_Lua.h"
+#endif
 #include "LuaBindings/StaticMesh_Lua.h"
 #include "LuaBindings/SoundWave_Lua.h"
+#if OCT_SKELETAL
 #include "LuaBindings/SkeletalMesh_Lua.h"
+#endif
 #include "LuaBindings/Texture_Lua.h"
 #include "LuaBindings/Font_Lua.h"
 #include "LuaBindings/AssetManager_Lua.h"
 #include "LuaBindings/Widget_Lua.h"
 #include "LuaBindings/Quad_Lua.h"
 #include "LuaBindings/Text_Lua.h"
+#if OCT_UI_EXTRAS
 #include "LuaBindings/Button_Lua.h"
+#endif
+#if OCT_VIDEO
 #include "LuaBindings/VideoQuad_Lua.h"
+#endif
 #include "LuaBindings/Canvas_Lua.h"
+#if OCT_UI_EXTRAS
 #include "LuaBindings/Poly_Lua.h"
+#endif
+#if OCT_UI_EXTRAS
 #include "LuaBindings/PolyRect_Lua.h"
+#endif
 #include "LuaBindings/Signal_Lua.h"
 #include "LuaBindings/Stream_Lua.h"
 #include "LuaBindings/TimerManager_Lua.h"
@@ -77,7 +109,9 @@ void BindLuaInterface()
     Audio_Lua::Bind();
     Log_Lua::Bind();
     Maths_Lua::Bind();
+#if OCT_NETWORK
     Network_Lua::Bind();
+#endif
     Renderer_Lua::Bind();
     System_Lua::Bind();
     World_Lua::Bind();
@@ -94,21 +128,39 @@ void BindLuaInterface()
     Primitive3D_Lua::Bind();
     Mesh3D_Lua::Bind();
     StaticMesh3D_Lua::Bind();
+#if OCT_SKELETAL
     SkeletalMesh3D_Lua::Bind();
+#endif
     Camera3D_Lua::Bind();
     Light3D_Lua::Bind();
     DirectionalLight3D_Lua::Bind();
     PointLight3D_Lua::Bind();
     Audio3D_Lua::Bind();
+#if OCT_PHYSICS
     Box3D_Lua::Bind();
+#endif
+#if OCT_PHYSICS
     Capsule3D_Lua::Bind();
+#endif
+#if OCT_PARTICLES
     Particle3D_Lua::Bind();
+#endif
+#if OCT_SPLINES
     Spline3D_Lua::Bind();
+#endif
     ShadowMesh3D_Lua::Bind();
+#if OCT_INSTANCING
     InstancedMesh3D_Lua::Bind();
+#endif
+#if OCT_TEXT3D
     TextMesh3D_Lua::Bind();
+#endif
+#if OCT_PHYSICS
     Sphere3D_Lua::Bind();
+#endif
+#if OCT_VIDEO
     Video3D_Lua::Bind();
+#endif
 
     // Assets need to be bound in hierarchy order.
     Asset_Lua::Bind();
@@ -116,11 +168,17 @@ void BindLuaInterface()
     Material_Lua::Bind();
     MaterialInstance_Lua::Bind();
     MaterialLite_Lua::Bind();
+#if OCT_PARTICLES
     ParticleSystem_Lua::Bind();
+#endif
+#if OCT_PARTICLES
     ParticleSystemInstance_Lua::Bind();
+#endif
     StaticMesh_Lua::Bind();
     SoundWave_Lua::Bind();
+#if OCT_SKELETAL
     SkeletalMesh_Lua::Bind();
+#endif
     Texture_Lua::Bind();
     Font_Lua::Bind();
 
@@ -128,11 +186,19 @@ void BindLuaInterface()
     Widget_Lua::Bind();
     Quad_Lua::Bind();
     Text_Lua::Bind();
+#if OCT_UI_EXTRAS
     Button_Lua::Bind();
+#endif
+#if OCT_VIDEO
     VideoQuad_Lua::Bind();
+#endif
     Canvas_Lua::Bind();
+#if OCT_UI_EXTRAS
     Poly_Lua::Bind();
+#endif
+#if OCT_UI_EXTRAS
     PolyRect_Lua::Bind();
+#endif
 
     Misc_Lua::BindMisc();
 }

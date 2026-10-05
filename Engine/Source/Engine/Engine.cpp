@@ -17,7 +17,9 @@
 #include "ScriptAutoReg.h"
 #include "ScriptFunc.h"
 #include "TimerManager.h"
+#if OCT_UI_EXTRAS
 #include "Nodes/Widgets/Button.h"
+#endif
 #include "Nodes/Widgets/LoadingScreen.h"
 #include "FileWatcher.h"
 #include "ScriptUtils.h"
@@ -159,25 +161,46 @@ void OnScriptFileChanged(const FileChangeEvent& event)
 
 void ForceLinkage()
 {
+    // (Parts a game can leave out are behind their switches: EngineFeatures.h.)
     // Node Types
     FORCE_LINK_CALL(Node);
     FORCE_LINK_CALL(Node3D);
     FORCE_LINK_CALL(Audio3D);
+#if OCT_PHYSICS
     FORCE_LINK_CALL(Box3D);
+#endif
     FORCE_LINK_CALL(Camera3D);
     FORCE_LINK_CALL(DirectionalLight3D);
+#if OCT_PARTICLES
     FORCE_LINK_CALL(Particle3D);
+#endif
     FORCE_LINK_CALL(PointLight3D);
+#if OCT_SKELETAL
     FORCE_LINK_CALL(SkeletalMesh3D);
+#endif
+#if OCT_PHYSICS
     FORCE_LINK_CALL(Sphere3D);
+#endif
     FORCE_LINK_CALL(StaticMesh3D);
+#if OCT_PHYSICS
     FORCE_LINK_CALL(Capsule3D);
+#endif
     FORCE_LINK_CALL(ShadowMesh3D);
+#if OCT_TEXT3D
     FORCE_LINK_CALL(TextMesh3D);
+#endif
+#if OCT_INSTANCING
     FORCE_LINK_CALL(InstancedMesh3D);
+#endif
+#if OCT_SPLINES
     FORCE_LINK_CALL(Spline3D);
+#endif
+#if OCT_NAVIGATION
     FORCE_LINK_CALL(NavMesh3D);
+#endif
+#if OCT_VIDEO
     FORCE_LINK_CALL(Video3D);
+#endif
 
     // Asset Types
     FORCE_LINK_CALL(Scene);
@@ -185,28 +208,50 @@ void ForceLinkage()
     FORCE_LINK_CALL(MaterialBase);
     FORCE_LINK_CALL(MaterialInstance);
     FORCE_LINK_CALL(MaterialLite);
+#if OCT_PARTICLES
     FORCE_LINK_CALL(ParticleSystem);
+#endif
+#if OCT_PARTICLES
     FORCE_LINK_CALL(ParticleSystemInstance);
+#endif
+#if OCT_SKELETAL
     FORCE_LINK_CALL(SkeletalMesh);
+#endif
     FORCE_LINK_CALL(SoundWave);
     FORCE_LINK_CALL(StaticMesh);
     FORCE_LINK_CALL(Texture);
     FORCE_LINK_CALL(Font);
+#if OCT_VIDEO
     FORCE_LINK_CALL(VideoClip);
+#endif
 
     // Widget Types
+#if OCT_UI_EXTRAS
     FORCE_LINK_CALL(ArrayWidget);
+#endif
     FORCE_LINK_CALL(Canvas);
+#if OCT_CONSOLE
     FORCE_LINK_CALL(Console);
+#endif
     FORCE_LINK_CALL(Quad);
+#if OCT_UI_EXTRAS
     FORCE_LINK_CALL(PolyRect);
+#endif
+#if OCT_UI_EXTRAS
     FORCE_LINK_CALL(Poly);
+#endif
+#if OCT_STATS
     FORCE_LINK_CALL(StatsOverlay);
+#endif
     FORCE_LINK_CALL(LoadingScreen);
     FORCE_LINK_CALL(Text);
     FORCE_LINK_CALL(Widget);
+#if OCT_UI_EXTRAS
     FORCE_LINK_CALL(Button);
+#endif
+#if OCT_VIDEO
     FORCE_LINK_CALL(VideoQuad);
+#endif
 }
 
 Platform StringToPlatform(const char* str)
@@ -769,7 +814,9 @@ bool Update()
     sEngineState.mGameElapsedTime += gameDeltaTime;
     sEngineState.mRealElapsedTime += realDeltaTime;
 
+#if OCT_UI_EXTRAS
     Button::StaticUpdate();
+#endif
 
     GetTimerManager()->Update(gameDeltaTime);
 

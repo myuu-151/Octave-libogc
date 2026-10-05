@@ -1,4 +1,5 @@
 #include "EngineTypes.h"
+#include "EngineFeatures.h"
 #include "Log.h"
 #include "Engine.h"
 #include "Clock.h"
@@ -228,11 +229,13 @@ int System_Lua::MemoryCensus(lua_State* L)
             if (r->mCompact && r->mCompactVertices != nullptr) bytes += m->GetNumVertices() * 16;
 #endif
         }
+#if OCT_SKELETAL
         else if (type == SkeletalMesh::GetStaticType())
         {
             SkeletalMesh* m = static_cast<SkeletalMesh*>(asset);
             bytes = m->GetNumVertices() * sizeof(VertexSkinned) + m->GetNumIndices() * sizeof(IndexType);
         }
+#endif
         else if (type == SoundWave::GetStaticType())
         {
             bytes = static_cast<SoundWave*>(asset)->GetWaveDataSize();

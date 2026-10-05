@@ -56,7 +56,8 @@
 #define SHADOW_RANGE_Z 400.0f
 
 #define LOGGING_ENABLED 1
-#define CONSOLE_ENABLED 1
+#include "EngineFeatures.h"
+#define CONSOLE_ENABLED OCT_CONSOLE  // (EngineFeatures.h: a game can leave the console out)
 #define DEBUG_DRAW_ENABLED 1
 
 #define INVALID_TYPE_ID 0

@@ -1,5 +1,6 @@
 
 #include "LuaBindings/World_Lua.h"
+#include "EngineFeatures.h"
 #include "LuaBindings/Vector_Lua.h"
 #include "LuaBindings/Node_Lua.h"
 #include "LuaBindings/Node3d_Lua.h"
@@ -486,7 +487,11 @@ int World_Lua::IsInternalEdgeSmoothingEnabled(lua_State* L)
 int World_Lua::SpawnParticle(lua_State* L)
 {
     World* world = CHECK_WORLD(L, 1);
+#if OCT_PARTICLES
     ParticleSystem* particleSys = CHECK_PARTICLE_SYSTEM(L, 2);
+#else
+    ParticleSystem* particleSys = nullptr;  // (no particles: EngineFeatures.h; spawns nothing)
+#endif
     glm::vec3 pos = CHECK_VECTOR(L, 3);
 
     Particle3D* ret = world->SpawnParticle(particleSys, pos);

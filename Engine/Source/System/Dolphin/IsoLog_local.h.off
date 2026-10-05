@@ -1,0 +1,42 @@
+// LOCAL, git-ignored diagnostic logger for ISO asset streaming (Version B).
+// Writes each ISO mount / hit / miss to /octiso.log on the SD. This file is NOT
+// committed -- it's a personal debug tool. When it's absent (any other machine /
+// the shipped repo), System_Dolphin.cpp falls back to a no-op IsoLog, so nothing
+// logs and nothing touches SYS_Report/the RTC's EXI device. Delete/rename this
+// file to silence logging locally without editing tracked source.
+#pragma once
+
+#include <stdio.h>
+#include <stdarg.h>
+#include <ogc/system.h>
+
+static bool sIsoLogFileWorked = false;
+
+static void IsoLog(const char* fmt, ...)
+{
+    FILE* lf = fopen("/octiso.log", "a");
+    if (lf == nullptr)
+    {
+        // A write failed after the SD log had worked (real hardware): just drop the line.
+        // SYS_Report talks to the IPL EXI device, which on real hardware can disturb the RTC or
+        // hang, so it's never used once there's an SD log.
+        if (sIsoLogFileWorked)
+        {
+            return;
+        }
+
+        // No SD log at all (e.g. Dolphin without an SD adapter): send the line to Dolphin's log
+        // window instead (View > Show Log; enable the OSReport log type).
+        char line[512];
+        va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof(line), fmt, ap); va_end(ap);
+        SYS_Report("%s\n", line);
+        return;
+    }
+    sIsoLogFileWorked = true;
+    va_list ap; va_start(ap, fmt); vfprintf(lf, fmt, ap); va_end(ap);
+    fputc('\n', lf);
+
+    // No fsync here: with SdGeckoDma mounted, syncing after every line made the log
+    // go missing on hardware (the stock libogc mount was fine either way).
+    fclose(lf);
+}

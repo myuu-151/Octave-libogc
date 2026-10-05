@@ -778,8 +778,19 @@ int32_t StaticMesh::StageColorsFrom(const std::string& assetName, uint32_t at, u
     // 32-byte aligned, as the texture refills' buffers are: on a GameCube reading the SD card, the
     // card's DMA can land here directly. (The "whole 3D picture as garbage while colours were read
     // in" once blamed on this buffer was libogc's broken guMtxConcat reading a float from inside
-    // it: see GxUtils.h.)
-    static char sPiece[kMost * kVertexBytes] __attribute__((aligned(32)));
+    // it: see GxUtils.h.)  Made the first time, and kept: a game that never restages colours
+    // doesn't carry it.
+    static char* sPiece = nullptr;
+    if (sPiece == nullptr)
+    {
+        sPiece = (char*)memalign(32, kMost * kVertexBytes);
+        if (sPiece == nullptr)
+        {
+            LogError("Mesh %s: no memory to read %s's colours", GetName().c_str(), assetName.c_str());
+            mStagedFrom.clear();
+            return -1;
+        }
+    }
     uint32_t colorScale = GetEngineConfig()->mColorScale;
     uint32_t shiftCount = (colorScale != 1) ? (colorScale >> 1) : 0;
     uint32_t stop = (maxVertices >= mNumVertices - at) ? mNumVertices : at + maxVertices;

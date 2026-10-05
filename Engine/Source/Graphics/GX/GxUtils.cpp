@@ -1,6 +1,7 @@
 #if API_GX
 
 #include "Graphics/GX/GxUtils.h"
+#include "EngineFeatures.h"
 #include "Graphics/GX/GxTypes.h"
 #include "Graphics/GraphicsTypes.h"
 
@@ -204,6 +205,7 @@ void PrepareUiRendering()
     gGxContext.mLighting.mMaterialSrc = GX_SRC_VTX;
 }
 
+#if OCT_SKELETAL
 bool IsCpuSkinningRequired(SkeletalMesh3D* component)
 {
     if (component->GetSkeletalMesh() == nullptr)
@@ -215,6 +217,7 @@ bool IsCpuSkinningRequired(SkeletalMesh3D* component)
         return component->GetSkeletalMesh()->GetNumBones() > MAX_GPU_BONES;
     }
 }
+#endif
 
 void LoadEnvTexMtx(const Mtx normalMtx)
 {
@@ -813,6 +816,7 @@ void BindStaticMesh(StaticMesh* staticMesh, uint32_t* instanceColors)
     GX_InvVtxCache();
 }
 
+#if OCT_SKELETAL
 void BindSkeletalMesh(SkeletalMesh* skeletalMesh)
 {
     uint8_t* vertBytes = (uint8_t*)skeletalMesh->GetVertices().data();
@@ -851,6 +855,7 @@ void BindSkeletalMesh(SkeletalMesh* skeletalMesh)
     DCFlushRange(vertBytes, numVertices * vertexSize);
     GX_InvVtxCache();
 }
+#endif
 
 uint8_t ConfigTev(uint8_t tevStage, uint32_t textureSlot, TevMode mode, bool vertexColorBlend)
 {

@@ -1,4 +1,5 @@
 #include "Nodes/3D/Node3d.h"
+#include "EngineFeatures.h"
 
 #include "AssetManager.h"
 #include "Nodes/Node.h"
@@ -151,7 +152,12 @@ bool Node3D::IsNode3D() const
 
 void Node3D::AttachToBone(SkeletalMesh3D* parent, const char* boneName, bool keepWorldTransform, int32_t childIndex)
 {
+#if OCT_SKELETAL
     int32_t parentBoneIndex = parent->FindBoneIndex(boneName);
+#else
+    (void)boneName;
+    int32_t parentBoneIndex = -1;  // (no skeletal meshes: EngineFeatures.h)
+#endif
     AttachToBone(parent, parentBoneIndex, keepWorldTransform, childIndex);
 }
 
@@ -480,12 +486,14 @@ void Node3D::SetWorldRotation(glm::quat rotation)
         Node3D* parent = static_cast<Node3D*>(mParent.Get());
         glm::quat parentWorldRot = parent->GetWorldRotationQuat();
 
+#if OCT_SKELETAL
         if (mParentBoneIndex != -1 &&
             mParent->GetType() == SkeletalMesh3D::GetStaticType())
         {
             SkeletalMesh3D* skComp = (SkeletalMesh3D*) parent;
             parentWorldRot = parentWorldRot * skComp->GetBoneRotationQuat(mParentBoneIndex);
         }
+#endif
 
         newRelativeRot = glm::inverse(parentWorldRot) * rotation;
     }
@@ -624,6 +632,7 @@ glm::mat4 Node3D::GetParentTransform()
         {
             transform = parent3d->GetTransform();
         }
+#if OCT_SKELETAL
         else if (mParent->GetType() == SkeletalMesh3D::GetStaticType())
         {
             SkeletalMesh3D* skComp = (SkeletalMesh3D*)parent3d;
@@ -637,6 +646,7 @@ glm::mat4 Node3D::GetParentTransform()
                     skComp->GetSkeletalMesh()->GetBone(mParentBoneIndex).mInvOffsetMatrix;
             }
         }
+#endif
     }
 
     return transform;

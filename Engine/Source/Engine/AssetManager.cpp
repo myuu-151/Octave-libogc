@@ -1,4 +1,5 @@
 #include "AssetManager.h"
+#include "EngineFeatures.h"
 #include "Asset.h"
 #include "AssetDir.h"
 #include "Engine.h"
@@ -810,11 +811,14 @@ void AssetManager::ImportEngineAssets()
         ImportEngineAsset(StaticMesh::GetStaticType(), engineMeshes, "SM_Torus");
         ImportEngineAsset(StaticMesh::GetStaticType(), engineMeshes, "SM_CapsuleCylinder");
         ImportEngineAsset(StaticMesh::GetStaticType(), engineMeshes, "SM_CapsuleCap");
+#if OCT_SKELETAL
         SkeletalMesh* allegroMesh = (SkeletalMesh*) ImportEngineAsset(SkeletalMesh::GetStaticType(), engineMeshes, "SK_Allegro");
         allegroMesh->SetMaterial(allegroMat);
+#endif
 
         Renderer::Get()->LoadDefaultMeshes();
 
+#if OCT_PARTICLES
         // Create a default particle system
         AssetStub* defParticleStub = CreateAndRegisterAsset(ParticleSystem::GetStaticType(), engineParticles, "P_DefaultParticle", true);
         ParticleSystem* defaultParticle = (ParticleSystem*)defParticleStub->mAsset;
@@ -831,6 +835,7 @@ void AssetManager::ImportEngineAssets()
         defaultParticle->SetRadialVelocity(true);
         defaultParticle->SetSpawnRate(100.0f);
         defaultParticle->SetMaterial(defaultUnlitMaterial);
+#endif
 
         // Import fonts
         Font* fontRoboto32 = (Font*) ImportEngineAsset(Font::GetStaticType(), engineFonts, "F_Roboto32");

@@ -17,15 +17,12 @@ include $(DEVKITPPC)/wii_rules
 # INCLUDES is a list of directories containing extra header files
 #---------------------------------------------------------------------------------
 TARGET		:=	$(notdir $(CURDIR))
-# Parts of Octave a game can leave out (Source/Engine/EngineFeatures.h):
-# OCT_PHYSICS=0, OCT_NAVIGATION=0, OCT_VORBIS=0, from the game's makefile. A
-# library built with any off has folders of its own (Build/Wii_nophysics...),
-# beside the whole one, so games built either way share this checkout.
-OCT_PHYSICS	?=	1
-OCT_NAVIGATION	?=	1
-OCT_VORBIS	?=	1
-export OCT_PHYSICS OCT_NAVIGATION OCT_VORBIS
-OCT_VARIANT	:=	$(if $(filter 0,$(OCT_PHYSICS)),_nophysics)$(if $(filter 0,$(OCT_NAVIGATION)),_nonav)$(if $(filter 0,$(OCT_VORBIS)),_novorbis)
+# Parts of Octave a game can leave out (Source/Engine/EngineFeatures.h; the
+# list and the library's folder name are in OctFeatures.mk): OCT_PHYSICS=0
+# and so on, from the game's makefile. A library built with any off has
+# folders of its own (Build/Wii_nophysics...), beside the whole one, so games
+# built either way share this checkout.
+include $(dir $(firstword $(MAKEFILE_LIST)))OctFeatures.mk
 BUILD		:=	Intermediate/Wii$(OCT_VARIANT)
 SOURCES		:=	Source \
 				Source/Engine \
@@ -59,7 +56,7 @@ BULLET_DIR	:=	$(CURDIR)/../External/Bullet
 #---------------------------------------------------------------------------------
 
 CFLAGS	= -g -O2 -Wall $(MACHDEP) $(INCLUDE) -DPLATFORM_WII=1 -DPLATFORM_DOLPHIN=1 -DAPI_GX=1 \
-			-DOCT_PHYSICS=$(OCT_PHYSICS) -DOCT_NAVIGATION=$(OCT_NAVIGATION) -DOCT_VORBIS=$(OCT_VORBIS)
+			$(OCT_DEFINES)
 CXXFLAGS	=	$(CFLAGS)
 
 LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map

@@ -1,4 +1,5 @@
 #include "NetworkManager.h"
+#include "EngineFeatures.h"
 #include "Engine.h"
 #include "Log.h"
 #include "Nodes/Node.h"
@@ -12,6 +13,8 @@
 
 #include "Network/NetPlatformEpic.h"
 #include "Network/NetPlatformSteam.h"
+
+#if OCT_NETWORK
 
 #ifdef SendMessage
 #undef SendMessage
@@ -2376,3 +2379,62 @@ void NetworkManager::UpdateNodeRelevancy(Node* testNode)
         }
     }
 }
+
+#else  // OCT_NETWORK
+
+// Built without networking (EngineFeatures.h): a manager that is always what
+// the real one is in a game that never connects -- local, the authority, no
+// clients, no net nodes -- and sends nothing. NetMsg, the platforms and the
+// sockets aren't linked.
+
+NetworkManager* NetworkManager::sInstance = nullptr;
+
+bool NetIsClient() { return false; }
+bool NetIsServer() { return false; }
+bool NetIsLocal() { return true; }
+bool NetIsAuthority() { return true; }
+NetHostId NetGetHostId() { return AUTHORITY_HOST_ID; }
+
+NetworkManager::NetworkManager() {}
+
+void NetworkManager::Create()
+{
+    OCT_ASSERT(sInstance == nullptr);
+    sInstance = new NetworkManager();
+}
+
+void NetworkManager::Destroy()
+{
+    delete sInstance;
+    sInstance = nullptr;
+}
+
+NetworkManager* NetworkManager::Get() { return sInstance; }
+
+void NetworkManager::Initialize() {}
+void NetworkManager::Shutdown() {}
+void NetworkManager::PreTickUpdate(float) {}
+void NetworkManager::PostTickUpdate(float) {}
+
+NetStatus NetworkManager::GetNetStatus() const { return mNetStatus; }
+bool NetworkManager::IsServer() const { return false; }
+bool NetworkManager::IsClient() const { return false; }
+bool NetworkManager::IsLocal() const { return true; }
+bool NetworkManager::IsAuthority() const { return true; }
+NetHostId NetworkManager::GetHostId() const { return mHostId; }
+
+void NetworkManager::AddNetNode(Node*, NetId) {}
+void NetworkManager::RemoveNetNode(Node*) {}
+const std::unordered_map<NetId, Node*>& NetworkManager::GetNetNodeMap() const { return mNetNodeMap; }
+Node* NetworkManager::GetNetNode(NetId) { return nullptr; }
+float NetworkManager::GetRelevancyDistanceSquared() const { return mRelevancyDistanceSquared; }
+void NetworkManager::SetPawn(NetHostId, Node*) {}
+Node* NetworkManager::GetPawn(NetHostId) { return nullptr; }
+
+void NetworkManager::SendInvokeMsg(NetMsgInvoke&, Node*, NetFunc*, uint32_t, const Datum**) {}
+void NetworkManager::SendInvokeMsg(Node*, NetFunc*, uint32_t, const Datum**) {}
+void NetworkManager::SendInvokeScriptMsg(Script*, ScriptNetFunc*, uint32_t, const Datum**) {}
+void NetworkManager::SendSpawnMessage(Node*, NetClient*) {}
+void NetworkManager::SendDestroyMessage(Node*, NetClient*) {}
+
+#endif  // OCT_NETWORK
