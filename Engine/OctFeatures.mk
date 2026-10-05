@@ -14,7 +14,7 @@
 # their old tags, so existing libraries keep their folders.)
 OCT_FEATURES	:=	PHYSICS:physics NAVIGATION:nav VORBIS:vorbis NETWORK:net VIDEO:video \
 			SPLINES:splines SKELETAL:skeletal PARTICLES:particles INSTANCING:instancing \
-			TEXT3D:text3d UI_EXTRAS:uiextras CONSOLE:console STATS:stats
+			TEXT3D:text3d UI_EXTRAS:uiextras CONSOLE:console STATS:stats LUA:lua
 
 oct_name	=	$(word 1,$(subst :, ,$(1)))
 oct_tag		=	$(word 2,$(subst :, ,$(1)))

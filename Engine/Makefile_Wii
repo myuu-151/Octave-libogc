@@ -45,6 +45,11 @@ SOURCES		:=	Source \
 				../External/Vorbis \
 				../External/recast/Recast/Source/ \
 				../External/recast/Detour/Source/
+# Without Lua (OCT_LUA=0) neither the VM nor the bindings are built: the
+# engine keeps only its headers, for the types.
+ifeq ($(OCT_LUA),0)
+SOURCES		:=	$(filter-out Source/LuaBindings ../External/Lua,$(SOURCES))
+endif
 #DATA		:=	data
 #TEXTURES	:=	textures
 INCLUDES	:=	Source Source/Engine ../External ../External/Bullet ../External/Vorbis ../External/recast/Recast/Include ../External/recast/Detour/Include

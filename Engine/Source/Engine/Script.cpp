@@ -1313,6 +1313,7 @@ bool Script::IsActive() const
 
 void Script::SetWorld(World* world)
 {
+#if LUA_ENABLED
     if (IsActive())
     {
         lua_State* L = GetLua();
@@ -1323,6 +1324,7 @@ void Script::SetWorld(World* world)
         // Pop Node_Lua userdata
         lua_pop(L, 1);
     }
+#endif
 }
 
 bool Script::ReloadScriptFile(const std::string& fileName, bool restartScript)
@@ -1503,6 +1505,7 @@ void Script::OnCollision(
 
 bool Script::HasFunction(const char* name) const
 {
+#if LUA_ENABLED
     bool ret = false;
 
     if (IsActive())
@@ -1524,6 +1527,9 @@ bool Script::HasFunction(const char* name) const
     }
 
     return ret;
+#else
+    return false;
+#endif
 }
 
 // These functions are kinda nasty, but it's a nice convenience for the game programmer

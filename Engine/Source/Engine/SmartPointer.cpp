@@ -6,6 +6,7 @@
 
 void MakeNodeUserdataStrong(Node* node)
 {
+#if LUA_ENABLED
     // Is there only one shared ref right now? But we have userdata created?
     // Then that one ref must be the NodePtr in Node_Lua. So now that we 
     // are referencing it in C++, we need to move its weak ref to a strong ref.
@@ -47,10 +48,12 @@ void MakeNodeUserdataStrong(Node* node)
 
         OCT_ASSERT(preTop == postTop);
     }
+#endif
 }
 
 void MakeNodeUserdataWeak(Node* node)
 {
+#if LUA_ENABLED
     // Are we about to drop to the last SharedPtr?
     // And is it the userdata shared ptr? If so, unref the 
     // userdata in the registry so that it will be garbage
@@ -93,4 +96,5 @@ void MakeNodeUserdataWeak(Node* node)
 
         OCT_ASSERT(preTop == postTop);
     }
+#endif
 }

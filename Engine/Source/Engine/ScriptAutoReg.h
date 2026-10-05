@@ -3,6 +3,7 @@
 #include "Utilities.h"
 #include "Log.h"
 
+#if LUA_ENABLED
 #define DECLARE_SCRIPT_LINK(Type, ParentType, TopType) \
     static bool sRegisteredScriptFuncs_##Type; \
     virtual void RegisterScriptFuncs(lua_State* L) override;
@@ -40,6 +41,29 @@
     { \
         RegisterScriptFuncs(L); \
     }
+
+#else
+
+// Without Lua (OCT_LUA=0): the classes keep their declarations, with nothing to register.
+#define DECLARE_SCRIPT_LINK(Type, ParentType, TopType) \
+    static bool sRegisteredScriptFuncs_##Type; \
+    virtual void RegisterScriptFuncs(lua_State* L) override;
+
+#define DEFINE_SCRIPT_LINK(Type, ParentType, TopType) \
+        bool Type::sRegisteredScriptFuncs_##Type = false; \
+        void Type::RegisterScriptFuncs(lua_State* L) { }
+
+#define DECLARE_SCRIPT_LINK_BASE(Base) \
+    virtual void RegisterScriptFuncs(lua_State* L); \
+    static void BindCommonLuaFuncs(lua_State* L, int mtIndex);
+
+#define DEFINE_SCRIPT_LINK_BASE(Base) \
+    void Base::RegisterScriptFuncs(lua_State* L){ } \
+    void Base::BindCommonLuaFuncs(lua_State* L, int mtIndex) { }
+
+#define REGISTER_SCRIPT_FUNCS()
+
+#endif  // LUA_ENABLED
 
 struct AutoRegData
 {

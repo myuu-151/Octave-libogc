@@ -741,9 +741,11 @@ bool Initialize()
 
 bool Update()
 {
+#if LUA_ENABLED
     // In case there is a Lua stack leak, just reset it to 0 every frame.
     lua_State* L = GetLua();
     lua_settop(L, 0);
+#endif
 
 #if EDITOR
     // Update FileWatcher for script hot-reloading

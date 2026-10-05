@@ -10,6 +10,7 @@ std::vector<AutoRegData>& GetGlobalAutoRegArray()
 
 void InitAutoRegScripts()
 {
+#if LUA_ENABLED
     lua_State* L = GetLua();
 
     std::vector<AutoRegData>& autoRegArray = GetGlobalAutoRegArray();
@@ -52,5 +53,6 @@ void InitAutoRegScripts()
 
     autoRegArray.clear();
     autoRegArray.shrink_to_fit();
+#endif
 }
 

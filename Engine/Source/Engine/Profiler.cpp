@@ -81,8 +81,12 @@ namespace
 
     int64_t LuaHeapBytes()
     {
+#if LUA_ENABLED
         lua_State* L = GetLua();
         return L ? (int64_t(lua_gc(L, LUA_GCCOUNT, 0)) * 1024 + lua_gc(L, LUA_GCCOUNTB, 0)) : 0;
+#else
+        return 0;
+#endif
     }
 
     void LuaPerfAdd(LuaPerf* e, uint64_t us, int64_t bytes)

@@ -52,6 +52,7 @@ bool ScriptFunc::operator==(const ScriptFunc& other) const
     else
     {
         // Otherwise we have to check if these keys reference the same object.
+#if LUA_ENABLED
         lua_State* L = GetLua();
         if (L != nullptr)
         {
@@ -65,6 +66,7 @@ bool ScriptFunc::operator==(const ScriptFunc& other) const
             equal = (lua_rawequal(L, -1, -2) == 1);
             lua_pop(L, 3);
         }
+#endif
     }
 
     return equal;
@@ -77,6 +79,7 @@ bool ScriptFunc::operator!=(const ScriptFunc& other) const
 
 void ScriptFunc::Call(uint32_t numParams, Datum* params) const
 {
+#if LUA_ENABLED
     lua_State* L = GetLua();
     if (L != nullptr && 
         mRef != LUA_REFNIL)
@@ -96,10 +99,12 @@ void ScriptFunc::Call(uint32_t numParams, Datum* params) const
 
         ScriptUtils::CallLuaFunc(numParams, 0);
     }
+#endif
 }
 
 Datum ScriptFunc::CallR(uint32_t numParams, Datum* params) const
 {
+#if LUA_ENABLED
     Datum retDatum;
 
     lua_State* L = GetLua();
@@ -129,10 +134,14 @@ Datum ScriptFunc::CallR(uint32_t numParams, Datum* params) const
     }
 
     return retDatum;
+#else
+    return Datum();
+#endif
 }
 
 void ScriptFunc::Push(lua_State* L) const
 {
+#if LUA_ENABLED
     // It's very important that this function pushes ONLY the function,
     // not the reference table also.
     if (mRef == LUA_REFNIL)
@@ -157,6 +166,7 @@ void ScriptFunc::Push(lua_State* L) const
         // Unref the temp ref
         luaL_unref(L, LUA_REGISTRYINDEX, tempRef);
     }
+#endif
 }
 
 bool ScriptFunc::IsValid() const
@@ -166,6 +176,7 @@ bool ScriptFunc::IsValid() const
 
 void ScriptFunc::RegisterRef(lua_State* L, int arg)
 {
+#if LUA_ENABLED
     OCT_ASSERT(mRef == LUA_REFNIL);
     OCT_ASSERT(lua_isfunction(L, arg));
 
@@ -184,10 +195,12 @@ void ScriptFunc::RegisterRef(lua_State* L, int arg)
 
     // Pop ref table and first value copy
     lua_pop(L, 2);
+#endif
 }
 
 void ScriptFunc::UnregisterRef()
 {
+#if LUA_ENABLED
     if (mRef != LUA_REFNIL)
     {
         lua_State* L = GetLua();
@@ -205,10 +218,12 @@ void ScriptFunc::UnregisterRef()
 
         mRef = LUA_REFNIL;
     }
+#endif
 }
 
 void ScriptFunc::CopyRef(int ref)
 {
+#if LUA_ENABLED
     // Unregister any previously referenced func
     UnregisterRef();
 
@@ -229,11 +244,14 @@ void ScriptFunc::CopyRef(int ref)
         // Pop ref table
         lua_pop(L, 1);
     }
+#endif
 }
 
 void ScriptFunc::CreateRefTable()
 {
+#if LUA_ENABLED
     lua_State* L = GetLua();
     lua_newtable(L);
     lua_setfield(L, LUA_REGISTRYINDEX, REF_TABLE_NAME);
+#endif
 }

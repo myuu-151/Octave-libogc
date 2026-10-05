@@ -28,6 +28,9 @@
 //                   ArrayWidget, Poly, PolyRect.
 //   OCT_CONSOLE     The on-screen console (Console; CONSOLE_ENABLED).
 //   OCT_STATS       The stats overlay (StatsOverlay).
+//   OCT_LUA         Lua: the VM, the bindings and Script nodes (LUA_ENABLED).
+//                   Off, the engine runs no scripts at all -- for a game written
+//                   wholly in C++.
 //
 // Each part's node types are left unregistered with it, so a scene or script
 // asking for one gets nothing. Off, nothing that refers to a part may be
@@ -88,4 +91,8 @@
 
 #ifndef OCT_STATS
 #define OCT_STATS 1
+#endif
+
+#ifndef OCT_LUA
+#define OCT_LUA 1
 #endif

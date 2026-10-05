@@ -16,9 +16,8 @@
 
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
 
-#if LUA_ENABLED
+// (Also without Lua, for the types in declarations: OCT_LUA=0 builds none of it.)
 #include <Lua/lua.hpp>
-#endif
 
 class Level;
 class Primitive3D;

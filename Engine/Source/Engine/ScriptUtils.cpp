@@ -339,6 +339,7 @@ uint32_t ScriptUtils::GetNextScriptInstanceNumber()
 
 void ScriptUtils::CallMethod(Node* node, const char* funcName, uint32_t numParams, const Datum** params, Datum* ret)
 {
+#if LUA_ENABLED
     lua_State* L = GetLua();
 
     Node_Lua::Create(L, node);
@@ -372,6 +373,7 @@ void ScriptUtils::CallMethod(Node* node, const char* funcName, uint32_t numParam
     }
 
     lua_pop(L, 1);
+#endif
 }
 
 void ScriptUtils::SetBreakOnScriptError(bool enableBreak)
@@ -546,6 +548,7 @@ void ScriptUtils::SetField(const char* table, int32_t key, const Datum& value)
 
 void ScriptUtils::DumpStack()
 {
+#if LUA_ENABLED
     lua_State* L = GetLua();
 
     // Taken from https://www.lua.org/pil/24.2.3.html
@@ -579,5 +582,6 @@ void ScriptUtils::DumpStack()
 
     LogWarning("=====================");
 
+#endif
 }
 
