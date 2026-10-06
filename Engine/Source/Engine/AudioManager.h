@@ -33,12 +33,14 @@ public:
         bool loop = false,
         int32_t priority = 0);
 
+    // A playing sound's volume and pitch; its priority too if one is given (>= 0), else it keeps
+    // the one it was played with.
     static void UpdateSound(
         SoundWave* soundWave,
         float volume,
         float pitch,
         bool loop = false,
-        int32_t priority = 0);
+        int32_t priority = -1);
 
     static void StopComponent(Audio3D* comp);
     static void StopSounds(SoundWave* soundWave);

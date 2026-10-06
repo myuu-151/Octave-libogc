@@ -748,6 +748,8 @@
     <ClCompile Include="Source\Engine\Stream.cpp" />
     <ClCompile Include="Source\Engine\VideoStream.cpp" />
     <ClCompile Include="Source\Engine\VideoPlayer.cpp" />
+    <ClCompile Include="Source\Engine\LightLayer.cpp" />
+    <ClCompile Include="Source\LuaBindings\LightLayer_Lua.cpp" />
     <ClCompile Include="Source\Engine\JpegYuvDecoder.cpp" />
     <ClCompile Include="Source\Engine\TableDatum.cpp" />
     <ClCompile Include="Source\Engine\TimerManager.cpp" />
@@ -1015,6 +1017,8 @@
     <ClInclude Include="Source\Engine\Stream.h" />
     <ClInclude Include="Source\Engine\VideoStream.h" />
     <ClInclude Include="Source\Engine\VideoPlayer.h" />
+    <ClInclude Include="Source\Engine\LightLayer.h" />
+    <ClInclude Include="Source\LuaBindings\LightLayer_Lua.h" />
     <ClInclude Include="Source\Engine\JpegYuvDecoder.h" />
     <ClInclude Include="Source\Engine\TableDatum.h" />
     <ClInclude Include="Source\Engine\TimerManager.h" />

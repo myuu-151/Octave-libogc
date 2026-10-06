@@ -46,13 +46,13 @@ Sig: `Audio.StopAllSounds()`
 
 ---
 ### UpdateSound
-Updates volume, pitch, and priority for a currently playing sound wave. Note: This will update volume/pitch/priority for all currently playing sounds of the same sound wave asset.
+Updates volume, pitch, and priority for a currently playing sound wave. Note: This will update volume/pitch/priority for all currently playing sounds of the same sound wave asset. Without a priority the sound keeps the one it was played with.
 
-Sig: `Audio.UpdateSound(sound, volume, pitch, priority=0)`
+Sig: `Audio.UpdateSound(sound, volume, pitch=1, priority)`
 - Arg: `SoundWave sound` Sound wave to update
 - Arg: `number volume` New volume
 - Arg: `number pitch` New pitch
-- Arg: `integer priority` New priority
+- Arg: `integer priority` New priority (optional: left as it is if not given)
 
 ---
 ### IsSoundPlaying

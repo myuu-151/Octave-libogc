@@ -88,12 +88,13 @@ int Audio_Lua::UpdateSound(lua_State* L)
     SoundWave* soundWave = CHECK_SOUND_WAVE(L, 1);
     float volume = CHECK_NUMBER(L, 2);
     float pitch = 1.0f;
-    int32_t priority = 0;
+    int32_t priority = -1;      // not given: the sound keeps its own
 
     if (!lua_isnoneornil(L, 3)) { pitch = CHECK_NUMBER(L, 3); }
     if (!lua_isnoneornil(L, 4)) { priority = CHECK_INTEGER(L, 4); }
 
-    AudioManager::UpdateSound(soundWave, volume, pitch, priority);
+    // (The priority used to be passed where the manager takes `loop`, and never arrived.)
+    AudioManager::UpdateSound(soundWave, volume, pitch, false, priority);
 
     return 0;
 }

@@ -556,7 +556,13 @@ void AudioManager::UpdateSound(
                 sAudioSources[i].mVolumeMult = volume;
                 sAudioSources[i].mPitchMult = pitch;
                 //sAudioSources[i].mLoop = loop;
-                sAudioSources[i].mPriority = priority;
+                // Only when given. Always setting it put every updated sound at 0, the lowest, and
+                // a looping sound turned up or down each frame then lost its voice to the next
+                // sound played (a game's music gone after the first line of text).
+                if (priority >= 0)
+                {
+                    sAudioSources[i].mPriority = priority;
+                }
 
                 // Adjust pitch and volume based on soundwave asset and sound class
                 float classVolume = GetAudioClassVolume(sAudioSources[i].mAudioClass);
